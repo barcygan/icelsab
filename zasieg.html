@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test zasięgu BLE</title>
+<style>
+  :root { --bg:#0e1116; --card:#181c23; --fg:#f2f4f7; --mut:#8b93a1; --ok:#2fbf71; --warn:#f2a93b; --bad:#e5484d; --line:#2a303a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.35 -apple-system, system-ui, sans-serif;
+         padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
+  h1 { font-size:20px; margin:0 0 12px; }
+  .status { display:flex; align-items:center; gap:10px; padding:14px; border-radius:14px; background:var(--card); margin-bottom:12px; }
+  .dot { width:16px; height:16px; border-radius:50%; background:var(--mut); flex:none; }
+  .status.ok .dot { background:var(--ok); } .status.warn .dot { background:var(--warn); } .status.bad .dot { background:var(--bad); }
+  .status b { font-size:18px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
+  .tile { background:var(--card); border-radius:14px; padding:12px; }
+  .tile .v { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .tile .l { color:var(--mut); font-size:13px; }
+  .tile.big { grid-column:1 / -1; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  button { width:100%; min-height:52px; border:0; border-radius:14px; font-size:17px; font-weight:600; margin-bottom:10px; color:#fff; background:#3a7bfd; }
+  button.sec { background:#2a303a; }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+  input { width:100%; min-height:52px; border-radius:14px; border:1px solid var(--line); background:var(--card); color:var(--fg); font-size:17px; padding:0 12px; }
+  #log { background:var(--card); border-radius:14px; padding:10px 12px; font:13px/1.45 ui-monospace, Menlo, monospace; max-height:40vh; overflow:auto; white-space:pre-wrap; }
+  .hint { color:var(--mut); font-size:13px; margin:6px 0 12px; }
+  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; margin-top:6px; }
+  .bar i { display:block; height:100%; width:0; background:var(--ok); transition:width .3s; }
+</style>
+<link rel="manifest" href="manifest.json">
+</head>
+<body>
+<h1>OpenCARV — test zasięgu Bluetooth</h1>
+
+<div id="status" class="status"><span class="dot"></span><div><b id="stText">Rozłączony</b><div class="hint" id="stSub" style="margin:0">Kliknij „Połącz”</div></div></div>
+
+<button id="btnConnect">Połącz z czujnikiem</button>
+
+<div class="grid">
+  <div class="tile big"><div class="l">Sygnał (RSSI z płytki)</div><div class="v" id="rssi">—</div><div class="bar"><i id="rssiBar"></i></div></div>
+  <div class="tile"><div class="l">Pakiety / s</div><div class="v" id="hz">0</div></div>
+  <div class="tile"><div class="l">Utracone (ostatnie 10 s)</div><div class="v" id="loss">—</div></div>
+  <div class="tile"><div class="l">Ostatni pakiet</div><div class="v" id="age">—</div></div>
+  <div class="tile"><div class="l">Rozłączenia</div><div class="v" id="disc">0</div></div>
+  <div class="tile big"><div class="l">Ruch czujnika (|a| g · |ω| obr/s)</div><div class="v" id="motion" style="font-size:22px">—</div></div>
+</div>
+
+<div class="row">
+  <input id="dist" type="number" inputmode="decimal" placeholder="Odległość [m]">
+  <button id="btnMark" class="sec" style="margin:0">Zapisz punkt</button>
+</div>
+<p class="hint">Odejdź kawałek, wpisz odległość i kliknij „Zapisz punkt” — zapisze się sygnał i straty w tym miejscu.</p>
+
+<p class="hint"><a href="index.html" style="color:#5b9dff">← Podgląd czujnika</a></p>
+<div id="log"></div>
+<div class="row" style="margin-top:10px">
+  <button id="btnCopy" class="sec">Kopiuj log</button>
+  <button id="btnSound" class="sec">Dźwięk: wł.</button>
+</div>
+
+<script>
+const SERVICE = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const CHAR    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+const $ = id => document.getElementById(id);
+
+let device = null, wantConnected = false, disconnects = 0, sound = true;
+let arrivals = [];          // {t (local ms), seq}
+let lastArrival = 0, lastRssi = null, lastMotion = null;
+const logLines = [];
+
+function ts() { return new Date().toLocaleTimeString('pl-PL'); }
+function log(msg) { logLines.push(`${ts()}  ${msg}`); $('log').textContent = logLines.slice().reverse().join('\n'); }
+
+function setStatus(cls, text, sub) {
+  $('status').className = 'status ' + cls; $('stText').textContent = text; $('stSub').textContent = sub || '';
+}
+
+function beep(freq = 440, ms = 250) {
+  if (!sound) return;
+  try {
+    const ctx = beep.ctx || (beep.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
+    g.gain.value = 0.2; o.start(); o.stop(ctx.currentTime + ms / 1000);
+  } catch (e) {}
+}
+
+function onPacket(ev) {
+  const s = new TextDecoder().decode(ev.target.value).split(',');
+  const now = performance.now();
+  lastArrival = now;
+  const seq = s.length >= 8 ? parseInt(s[7]) : null;
+  arrivals.push({ t: now, seq });
+  if (s.length >= 9) { const r = parseInt(s[8]); if (r !== 0 && !isNaN(r)) lastRssi = r; }
+  if (s.length >= 7) {
+    const ax = +s[1], ay = +s[2], az = +s[3], gx = +s[4], gy = +s[5], gz = +s[6];
+    lastMotion = { g: Math.hypot(ax, ay, az) / 9.81, rps: Math.hypot(gx, gy, gz) / (2 * Math.PI) };
+  }
+}
+
+function stats() {
+  const now = performance.now();
+  arrivals = arrivals.filter(a => now - a.t < 10000);
+  const last1s = arrivals.filter(a => now - a.t < 1000).length;
+  let loss = null;
+  const withSeq = arrivals.filter(a => a.seq !== null && !isNaN(a.seq));
+  if (withSeq.length > 5) {
+    const span = withSeq[withSeq.length - 1].seq - withSeq[0].seq + 1;
+    if (span > 0) loss = Math.max(0, 1 - withSeq.length / span);
+  }
+  return { hz: last1s, loss, age: lastArrival ? now - lastArrival : null };
+}
+
+function render() {
+  const st = stats();
+  $('hz').textContent = st.hz;
+  $('hz').className = 'v ' + (st.hz >= 80 ? 'ok' : st.hz >= 30 ? 'warn' : 'bad');
+  if (st.loss === null) { $('loss').textContent = '—'; $('loss').className = 'v'; }
+  else { const p = st.loss * 100; $('loss').textContent = p.toFixed(1) + '%'; $('loss').className = 'v ' + (p < 2 ? 'ok' : p < 15 ? 'warn' : 'bad'); }
+  $('age').textContent = st.age === null ? '—' : (st.age < 1000 ? Math.round(st.age) + ' ms' : (st.age / 1000).toFixed(1) + ' s');
+  $('age').className = 'v ' + (st.age === null ? '' : st.age < 200 ? 'ok' : st.age < 1000 ? 'warn' : 'bad');
+  if (lastRssi !== null) {
+    $('rssi').textContent = lastRssi + ' dBm  ' + (lastRssi > -65 ? '· mocny' : lastRssi > -80 ? '· średni' : '· słaby');
+    $('rssi').className = 'v ' + (lastRssi > -65 ? 'ok' : lastRssi > -80 ? 'warn' : 'bad');
+    const pct = Math.min(100, Math.max(0, (lastRssi + 100) / 60 * 100));
+    $('rssiBar').style.width = pct + '%';
+    $('rssiBar').style.background = lastRssi > -65 ? 'var(--ok)' : lastRssi > -80 ? 'var(--warn)' : 'var(--bad)';
+  } else if (device && device.gatt.connected) {
+    $('rssi').textContent = 'brak (stary firmware?)';
+  }
+  if (lastMotion) $('motion').textContent = `${lastMotion.g.toFixed(2)} g · ${lastMotion.rps.toFixed(2)} obr/s`;
+  $('disc').textContent = disconnects;
+  if (device && device.gatt.connected) {
+    if (st.age !== null && st.age > 1000) setStatus('warn', 'Połączony, brak danych', 'Sygnał na granicy zasięgu');
+    else setStatus('ok', 'Połączony', device.name || '');
+  }
+}
+setInterval(render, 250);
+
+async function connectGatt() {
+  setStatus('warn', 'Łączenie…', device.name || '');
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SERVICE);
+  const ch = await svc.getCharacteristic(CHAR);
+  ch.addEventListener('characteristicvaluechanged', onPacket);
+  await ch.startNotifications();
+  log('Połączono z ' + (device.name || 'czujnikiem'));
+  beep(880, 120);
+}
+
+async function onDisconnected() {
+  disconnects++;
+  lastRssi = null;
+  log(`ROZŁĄCZONO (#${disconnects})` + ($('dist').value ? ` przy ~${$('dist').value} m` : ''));
+  setStatus('bad', 'Rozłączony', wantConnected ? 'Próbuję połączyć ponownie…' : '');
+  beep(220, 600);
+  while (wantConnected && device && !device.gatt.connected) {
+    try { await connectGatt(); log('Połączono ponownie'); return; }
+    catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+  }
+}
+
+$('btnConnect').onclick = async () => {
+  if (device && device.gatt.connected) {
+    wantConnected = false; device.gatt.disconnect(); $('btnConnect').textContent = 'Połącz z czujnikiem';
+    setStatus('', 'Rozłączony', 'Kliknij „Połącz”'); log('Rozłączono ręcznie'); return;
+  }
+  if (!navigator.bluetooth) {
+    setStatus('bad', 'Brak Bluetooth w tej przeglądarce', 'Na iPhonie otwórz tę stronę w aplikacji Bluefy');
+    return;
+  }
+  try {
+    if (!device) {
+      device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }, { name: 'OpenCARV_Sensor' }], optionalServices: [SERVICE] });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+    }
+    wantConnected = true;
+    await connectGatt();
+    $('btnConnect').textContent = 'Rozłącz';
+  } catch (e) {
+    setStatus('bad', 'Nie udało się połączyć', e.message); log('Błąd: ' + e.message);
+  }
+};
+
+$('btnMark').onclick = () => {
+  const st = stats(); const d = $('dist').value || '?';
+  log(`PUNKT ${d} m: ${lastRssi ?? '—'} dBm, ${st.hz} pkt/s, straty ${st.loss === null ? '—' : (st.loss * 100).toFixed(1) + '%'}`);
+  beep(660, 100);
+};
+$('btnCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(logLines.join('\n')); $('btnCopy').textContent = 'Skopiowano'; }
+  catch (e) { $('btnCopy').textContent = 'Nie udało się'; }
+  setTimeout(() => $('btnCopy').textContent = 'Kopiuj log', 1500);
+};
+$('btnSound').onclick = () => { sound = !sound; $('btnSound').textContent = 'Dźwięk: ' + (sound ? 'wł.' : 'wył.'); };
+
+if (!navigator.bluetooth) setStatus('warn', 'Ta przeglądarka nie ma Bluetooth', 'iPhone: użyj aplikacji Bluefy · Mac: Chrome');
+log('Gotowe. Sygnał: > −65 dBm mocny, −65…−80 średni, < −80 słaby.');
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>

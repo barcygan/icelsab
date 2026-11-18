@@ -1,0 +1,2 @@
+{ "name": "OpenCARV czujnik", "short_name": "Czujnik", "start_url": "./index.html", "display": "standalone",
+  "background_color": "#0e1116", "theme_color": "#0e1116" }

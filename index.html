@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Podgląd czujnika</title>
+<style>
+  :root { --bg:#0e1116; --card:#181c23; --fg:#f2f4f7; --mut:#8b93a1; --line:#2a303a;
+          --ok:#2fbf71; --warn:#f2a93b; --bad:#e5484d; --x:#ff6b6b; --y:#4dd4ac; --z:#5b9dff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.35 -apple-system, system-ui, sans-serif;
+         padding:max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .dot { width:14px; height:14px; border-radius:50%; background:var(--mut); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  #st { font-weight:600; } #sub { color:var(--mut); font-size:13px; }
+  button { min-height:48px; border:0; border-radius:12px; font-size:16px; font-weight:600; color:#fff; background:#3a7bfd; padding:0 16px; }
+  button.sec { background:#2a303a; }
+  .full { width:100%; margin-bottom:12px; }
+  .card { background:var(--card); border-radius:14px; padding:12px; margin-bottom:12px; }
+  .card h2 { font-size:13px; font-weight:600; color:var(--mut); margin:0 0 8px; text-transform:uppercase; letter-spacing:.04em; display:flex; justify-content:space-between; }
+  .nums { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; font-variant-numeric:tabular-nums; }
+  .nums div { font-size:20px; font-weight:700; } .nums span { display:block; font-size:12px; color:var(--mut); font-weight:500; }
+  .cx { color:var(--x); } .cy { color:var(--y); } .cz { color:var(--z); }
+  canvas { width:100%; height:120px; display:block; margin-top:8px; }
+  .big { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+  .big .card { margin:0; } .big .v { font-size:32px; font-weight:700; font-variant-numeric:tabular-nums; } .big .l { color:var(--mut); font-size:13px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; } .row button { flex:1; }
+  .meta { color:var(--mut); font-size:13px; font-variant-numeric:tabular-nums; text-transform:none; letter-spacing:0; }
+</style>
+<link rel="manifest" href="manifest.json">
+</head>
+<body>
+<script>window.onerror=function(m,u,l){var d=document.createElement("pre");d.style.cssText="white-space:pre-wrap;color:#fff;background:#e5484d;padding:10px;border-radius:10px";d.textContent="Błąd JS: "+m+" (linia "+l+")";document.body.prepend(d);};</script>
+<header>
+  <span class="dot" id="dot"></span>
+  <div style="flex:1"><div id="st">Rozłączony</div><div id="sub">Kliknij „Połącz”</div></div>
+</header>
+<button id="btnConnect" class="full">Połącz z czujnikiem</button>
+
+<div class="big">
+  <div class="card"><div class="l">Obroty (oś Z, od zera)</div><div class="v" id="turns">0,0</div></div>
+  <div class="card"><div class="l">Prędkość obrotu</div><div class="v" id="rps">0,00</div><div class="l">obr/s · max <b id="rpsMax">0,00</b></div></div>
+  <div class="card"><div class="l">Przeciążenie |a|</div><div class="v" id="gNow">0,00 g</div><div class="l">max <b id="gMax">0,00</b> g</div></div>
+  <div class="card"><div class="l">Swobodny spadek / lot</div><div class="v" id="air">—</div><div class="l">ostatni czas &lt; 0,3 g</div></div>
+</div>
+
+<div class="card">
+  <h2><span>Akcelerometr [g]</span><span class="meta" id="accRange">±16 g</span></h2>
+  <div class="nums"><div class="cx" id="ax">0</div><div class="cy" id="ay">0</div><div class="cz" id="az">0</div></div>
+  <canvas id="cAcc"></canvas>
+</div>
+<div class="card">
+  <h2><span>Żyroskop [°/s]</span><span class="meta" id="clip"></span></h2>
+  <div class="nums"><div class="cx" id="gx">0</div><div class="cy" id="gy">0</div><div class="cz" id="gz">0</div></div>
+  <canvas id="cGyr"></canvas>
+</div>
+
+<div class="row" style="margin-bottom:12px">
+  <button class="sec" id="btnZero">Zeruj obroty i max</button>
+  <button class="sec" id="btnPause">Pauza wykresu</button>
+</div>
+<div class="meta" id="meta">—</div>
+<p class="meta" style="margin-top:14px"><a href="zasieg.html" style="color:#5b9dff">Test zasięgu →</a></p>
+
+<script>
+const SERVICE = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const CHAR    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+const G = 9.80665, RAD2DEG = 180 / Math.PI, WINDOW = 500; // ~5 s at 100 Hz
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2) => v.toFixed(d).replace('.', ',');
+
+let device = null, wantConnected = false, paused = false;
+const buf = { ax:[], ay:[], az:[], gx:[], gy:[], gz:[] };
+let last = null, prevT = null, turns = 0, rpsMax = 0, gMax = 0;
+let freeStart = null, lastAir = null, pkts = [], lastSeq = null, lost = 0, rssi = null;
+
+function status(cls, text, sub) { $('dot').className = 'dot ' + cls; $('st').textContent = text; $('sub').textContent = sub || ''; }
+
+function onPacket(ev) {
+  const p = new TextDecoder().decode(ev.target.value).split(',');
+  if (p.length < 7) return;
+  const t = +p[0];
+  const ax = p[1] / G, ay = p[2] / G, az = p[3] / G;                // g
+  const gx = p[4] * RAD2DEG, gy = p[5] * RAD2DEG, gz = p[6] * RAD2DEG; // deg/s
+  if (p.length >= 8) { const s = +p[7]; if (lastSeq !== null && s > lastSeq + 1) lost += s - lastSeq - 1; lastSeq = s; }
+  if (p.length >= 9 && +p[8] !== 0) rssi = +p[8];
+
+  // integrate rotation around sensor Z (deg) -> turns; uses device timestamps
+  if (prevT !== null) { const dt = (t - prevT) / 1000; if (dt > 0 && dt < 0.5) turns += gz * dt / 360; }
+  prevT = t;
+
+  const gmag = Math.hypot(ax, ay, az), rps = Math.hypot(gx, gy, gz) / 360;
+  gMax = Math.max(gMax, gmag); rpsMax = Math.max(rpsMax, rps);
+  // free fall / airtime: |a| < 0.3 g
+  if (gmag < 0.3) { if (freeStart === null) freeStart = t; }
+  else if (freeStart !== null) { const d = t - freeStart; if (d >= 60) lastAir = d; freeStart = null; }
+
+  last = { ax, ay, az, gx, gy, gz, gmag, rps };
+  pkts.push(performance.now());
+  if (!paused) for (const k in buf) { buf[k].push(last[k]); if (buf[k].length > WINDOW) buf[k].shift(); }
+}
+
+function drawChart(canvas, series, colors, range) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const c = canvas.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  let m = range; for (const s of series) for (const v of s) m = Math.max(m, Math.abs(v));
+  c.strokeStyle = '#2a303a'; c.lineWidth = 1; c.beginPath(); c.moveTo(0, h / 2); c.lineTo(w, h / 2); c.stroke();
+  c.fillStyle = '#8b93a1'; c.font = '11px -apple-system, sans-serif'; c.fillText('+' + Math.round(m), 2, 11); c.fillText('−' + Math.round(m), 2, h - 3);
+  series.forEach((s, i) => {
+    c.strokeStyle = colors[i]; c.lineWidth = 1.5; c.beginPath();
+    s.forEach((v, j) => { const x = j / (WINDOW - 1) * w, y = h / 2 - v / m * (h / 2 - 2); j ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.stroke();
+  });
+}
+
+function render() {
+  const now = performance.now(); pkts = pkts.filter(t => now - t < 1000);
+  if (last) {
+    $('ax').innerHTML = fmt(last.ax) + '<span>X</span>'; $('ay').innerHTML = fmt(last.ay) + '<span>Y</span>'; $('az').innerHTML = fmt(last.az) + '<span>Z</span>';
+    $('gx').innerHTML = Math.round(last.gx) + '<span>X</span>'; $('gy').innerHTML = Math.round(last.gy) + '<span>Y</span>'; $('gz').innerHTML = Math.round(last.gz) + '<span>Z</span>';
+    $('turns').textContent = fmt(turns, 1); $('rps').textContent = fmt(last.rps); $('rpsMax').textContent = fmt(rpsMax);
+    $('gNow').textContent = fmt(last.gmag) + ' g'; $('gMax').textContent = fmt(gMax);
+    $('air').textContent = lastAir === null ? '—' : fmt(lastAir / 1000) + ' s';
+    const clipped = Math.max(Math.abs(last.gx), Math.abs(last.gy), Math.abs(last.gz)) > 1950;
+    $('clip').textContent = clipped ? 'poza zakresem!' : '±2000 °/s'; $('clip').style.color = clipped ? 'var(--bad)' : '';
+  }
+  const g = WINDOW;
+  drawChart($('cAcc'), [buf.ax, buf.ay, buf.az], ['#ff6b6b', '#4dd4ac', '#5b9dff'], 2);
+  drawChart($('cGyr'), [buf.gx, buf.gy, buf.gz], ['#ff6b6b', '#4dd4ac', '#5b9dff'], 360);
+  $('meta').textContent = `${pkts.length} pakietów/s` + (lastSeq !== null ? ` · utracone: ${lost}` : '') + (rssi !== null ? ` · sygnał ${rssi} dBm` : '');
+  if (device && device.gatt.connected) {
+    const stale = last && pkts.length === 0;
+    status(stale ? 'warn' : 'ok', stale ? 'Połączony, brak danych' : 'Połączony', device.name || '');
+  }
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+async function connectGatt() {
+  status('warn', 'Łączenie…', device.name || '');
+  const server = await device.gatt.connect();
+  const ch = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CHAR);
+  ch.addEventListener('characteristicvaluechanged', onPacket);
+  await ch.startNotifications();
+  prevT = null;
+}
+async function onDisconnected() {
+  status('bad', 'Rozłączony', wantConnected ? 'Łączę ponownie…' : '');
+  while (wantConnected && device && !device.gatt.connected) {
+    try { await connectGatt(); return; } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+  }
+}
+
+$('btnConnect').onclick = async () => {
+  if (device && device.gatt.connected) {
+    wantConnected = false; device.gatt.disconnect(); $('btnConnect').textContent = 'Połącz z czujnikiem'; status('', 'Rozłączony', ''); return;
+  }
+  if (!navigator.bluetooth) { status('bad', 'Brak Bluetooth w tej przeglądarce', 'iPhone: Bluefy · Mac/Android: Chrome'); return; }
+  try {
+    if (!device) {
+      device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }, { name: 'OpenCARV_Sensor' }], optionalServices: [SERVICE] });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+    }
+    wantConnected = true; await connectGatt(); $('btnConnect').textContent = 'Rozłącz';
+  } catch (e) { status('bad', 'Nie udało się połączyć', e.message); }
+};
+$('btnZero').onclick = () => { turns = 0; rpsMax = 0; gMax = 0; lastAir = null; lost = 0; };
+$('btnPause').onclick = () => { paused = !paused; $('btnPause').textContent = paused ? 'Wznów wykres' : 'Pauza wykresu'; };
+if (!navigator.bluetooth) status('warn', 'Ta przeglądarka nie ma Bluetooth', 'iPhone: Bluefy · Mac/Android: Chrome');
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
