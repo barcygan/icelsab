@@ -72,10 +72,9 @@
 </header>
 <button id="btnConnect" class="full">Połącz z czujnikiem</button>
 
-<div class="seg" id="mode">
+<div class="seg two" id="mode">
   <button data-m="jump" class="on">Skoki</button>
   <button data-m="spin">Piruety</button>
-  <button data-m="both">Oba</button>
 </div>
 <div id="modeInfo"></div>
 <div class="seg two" id="prof">
@@ -160,7 +159,7 @@ setInterval(tick, 500);
 
 function renderLive(live) {
   const st = $('state');
-  if (!recording) { st.textContent = '—'; st.className = 'v'; $('rpsNow').textContent = '—'; $('diag').textContent = ''; return; }
+  if (!recording) { st.textContent = '—'; st.className = 'v'; $('rpsNow').textContent = '—'; $('diag').textContent = ''; renderModeTiles(null); return; }
   if (!cal) { st.textContent = 'Stój…'; st.className = 'v cal'; }
   else if (performance.now() - calOkAt < 2500) { st.textContent = 'Gotowe'; st.className = 'v ok'; }
   else if (mode !== 'spin' && live && live.inAir) { st.textContent = 'W locie'; st.className = 'v air'; }
@@ -193,11 +192,11 @@ document.querySelectorAll('#prof button').forEach(b => b.onclick = () => {
 const MODE_INFO = {
   jump: 'Skoki: obroty w powietrzu, czas lotu, wysokość, maks. i śr. obr/s, obroty na lodzie przed i po, siła wybicia i lądowania.',
   spin: 'Piruety: obroty, czas, maks. i śr. obr/s, pochylenie osi, równość tempa, wykres tempa, kierunek.',
-  both: 'Skoki i piruety naraz — każdy wykryty element dostaje własną kartę z parametrami.'
 };
 function tileHTML(l, v) { return `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div></div>`; }
 function renderModeTiles(live) {
   $('modeInfo').textContent = MODE_INFO[mode];
+  $('prof').hidden = mode !== 'jump';            // czułość dotyczy tylko skoków
   const jumps = events.filter(e => e.type === 'jump'), spins = events.filter(e => e.type === 'spin');
   const lj = jumps[jumps.length - 1], ls = spins[spins.length - 1], dash = '—';
   let h;
@@ -205,16 +204,12 @@ function renderModeTiles(live) {
     h = tileHTML(lj ? `Ostatni skok (${jumps.length})` : 'Ostatni skok', lj ? fmt(lj.revAir, 1) + ' obr' : dash)
       + tileHTML('Wysokość', lj ? Math.round(lj.heightCm) + ' cm' : dash)
       + tileHTML('Max obr/s', lj ? fmt(lj.maxRps, 1) : dash);
-  } else if (mode === 'spin') {
+  } else {
     const cur = live && live.spin;
     h = tileHTML(cur ? 'Piruet teraz' : (ls ? `Ostatni piruet (${spins.length})` : 'Piruet'),
                  cur ? fmt(cur.revs, 1) + ' obr' : ls ? fmt(ls.revs, 1) + ' obr' : dash)
       + tileHTML('Czas piruetu', cur ? fmt(cur.durationS, 1) + ' s' : ls ? fmt(ls.durationS, 1) + ' s' : dash)
       + tileHTML('Śr. obr/s', cur ? fmt(cur.revs / Math.max(0.1, cur.durationS), 1) : ls ? fmt(ls.avgRps, 1) : dash);
-  } else {
-    const last = events[events.length - 1];
-    h = tileHTML('Skoki', String(jumps.length)) + tileHTML('Piruety', String(spins.length))
-      + tileHTML('Ostatni', last ? fmt(last.type === 'jump' ? last.revAir : last.revs, 1) + ' obr' : dash);
   }
   $('modeTiles').innerHTML = h;
 }
@@ -233,7 +228,7 @@ function renderList() {
   const list = $('list');
   $('btnCopy').disabled = events.length === 0; $('btnCsv').disabled = samples.length === 0;
   if (!events.length) {
-    const what = mode === 'jump' ? 'skok' : mode === 'spin' ? 'piruet' : 'skok lub piruet';
+    const what = mode === 'jump' ? 'skok' : 'piruet';
     list.innerHTML = `<div class="empty">${recording ? (cal ? 'Nagrywam… wykonaj ' + what + '.' : 'Stań nieruchomo na sekundę — ustalam pion…') : (session ? 'Brak wykrytych elementów.' : 'Brak pomiarów. Połącz czujnik, wybierz rodzaj i naciśnij Start.')}</div>`;
     return;
   }
@@ -416,7 +411,7 @@ async function saveNow(finished) {
 }
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => saveNow(true), 800); }
 
-const MODE_PL = { jump: 'Skoki', spin: 'Piruety', both: 'Skoki i piruety' };
+const MODE_PL = { jump: 'Skoki', spin: 'Piruety', both: 'Skoki i piruety (stary tryb)' };
 function whenPL(ms) {
   const d = new Date(ms);
   return d.toLocaleDateString('pl-PL', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
@@ -460,7 +455,7 @@ async function openSession(id) {
   session = { id: rec.id, startedAt: rec.startedAt, endedAt: rec.endedAt };
   samples = S.unpack(rec.raw); cal = rec.cal; calApprox = !!rec.calApprox;
   events = rec.events || []; names = rec.names || {}; sessionStart = rec.sessionStart || null;
-  mode = rec.mode || 'jump';
+  mode = rec.mode === 'spin' ? 'spin' : 'jump';   // dawny tryb „oba” otwieramy jako skoki
   setProfile(rec.profile || 'standard', true);      // stare sesje liczono progami standardowymi
   document.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x.dataset.m === mode));
   $('hist').hidden = true; $('btnHist').textContent = 'Historia pomiarów';
