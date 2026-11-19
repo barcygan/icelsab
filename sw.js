@@ -1,6 +1,6 @@
 // Offline cache for the rink (no internet needed after the first visit).
-const CACHE = 'opencarv-v2';
-const FILES = ['./', './index.html', './zasieg.html', './pomiar.html', './pomiar_core.js', './manifest.json'];
+const CACHE = 'opencarv-v3';
+const FILES = ['./', './index.html', './zasieg.html', './pomiar.html', './pomiar_core.js', './pomiar_store.js', './manifest.json'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
   caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
