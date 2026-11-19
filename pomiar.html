@@ -28,6 +28,9 @@
   .live { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:8px; margin-bottom:8px; }
   .live.mode .tile { background:var(--card2); }
   .live.mode .v { font-size:22px; }
+  .seg.two { grid-template-columns:1fr 1fr; }
+  #diag { color:var(--mut); font-size:12px; margin:-2px 2px 12px; font-variant-numeric:tabular-nums; }
+  #diag b.hit { color:var(--ok); }
   #modeInfo { color:var(--mut); font-size:13px; margin:-4px 2px 10px; }
   #state.ok { color:var(--ok); } #state.spin { color:var(--acc); }
   .tile { background:var(--card); border-radius:12px; padding:10px; }
@@ -74,6 +77,10 @@
   <button data-m="both">Oba</button>
 </div>
 <div id="modeInfo"></div>
+<div class="seg two" id="prof">
+  <button data-p="kids" class="on">Czułość: dzieci</button>
+  <button data-p="standard">Standard</button>
+</div>
 
 <button id="btnRec" disabled>Start pomiaru</button>
 <p class="mut" id="hint" style="margin:0 0 10px">Po „Start” stań nieruchomo na sekundę — czujnik ustali, gdzie jest pion.</p>
@@ -87,6 +94,7 @@
   <div class="tile"><div class="l">Czas nagrania</div><div class="v" id="clock">0:00</div></div>
 </div>
 <div class="live mode" id="modeTiles"></div>
+<div id="diag"></div>
 
 <div id="list"><div class="empty">Brak pomiarów. Połącz czujnik, wybierz rodzaj i naciśnij Start.</div></div>
 
@@ -109,6 +117,8 @@ const fmt = (v, d = 1) => v.toFixed(d).replace('.', ',');
 $('ver').textContent = P.VERSION;
 
 let device = null, wantConnected = false, lastPacket = 0;
+let profile = 'kids';
+try { profile = localStorage.getItem('pomiar_profile') || 'kids'; } catch (e) {}
 let mode = 'jump', recording = false, recStart = 0, samples = [], cal = null, calApprox = false, calOkAt = null;
 let events = [], names = {}, sessionStart = null;
 let session = null;            // { id, startedAt } — sesja pokazana / nagrywana (zapisywana w historii)
@@ -140,7 +150,7 @@ function tick() {
     calOkAt = performance.now();
     $('hint').textContent = calApprox ? 'Pion ustalony w przybliżeniu (nie było bezruchu). Jedź.' : 'Pion ustalony — jedź i wykonuj elementy.';
   }
-  const r = P.analyze(samples, cal, mode);
+  const r = P.analyze(samples, cal, mode, { profile });
   events = r.events;
   renderLive(r.live);
   renderList();
@@ -157,7 +167,26 @@ function renderLive(live) {
   else { st.textContent = 'Jazda'; st.className = 'v'; }
   $('rpsNow').textContent = live ? fmt(live.rps, 1) : '—';
   renderModeTiles(live);
+  renderDiag(live);
 }
+function renderDiag(live) {
+  const el = $('diag');
+  if (!live || !live.thr || mode === 'spin') { el.textContent = ''; return; }
+  const air = live.avMin1s < live.thr.flightAv, hit = live.gMax1s >= live.thr.landingMinG;
+  el.innerHTML = `Czujnik, ostatnia 1 s: pion min <b class="${air ? 'hit' : ''}">${fmt(live.avMin1s, 2)} g</b> (lot &lt; ${fmt(live.thr.flightAv, 2)})`
+    + ` · uderzenie max <b class="${hit ? 'hit' : ''}">${fmt(live.gMax1s, 1)} g</b> (lądowanie ≥ ${fmt(live.thr.landingMinG, 2)})`;
+}
+function setProfile(p, keep) {
+  profile = p;
+  if (!keep) try { localStorage.setItem('pomiar_profile', p); } catch (e) {}
+  document.querySelectorAll('#prof button').forEach(x => x.classList.toggle('on', x.dataset.p === p));
+}
+setProfile(profile);
+document.querySelectorAll('#prof button').forEach(b => b.onclick = () => {
+  setProfile(b.dataset.p); renderedSig = '';
+  if (!recording && samples.length && cal) { events = P.analyze(samples, cal, mode, { profile }).events; renderList(); renderModeTiles(null); scheduleSave(); }
+  else tick();
+});
 
 // ---------- parametry ewolucji dla wybranej zakładki ----------
 const MODE_INFO = {
@@ -269,7 +298,7 @@ document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x === b));
   renderedSig = '';
   if (!recording && samples.length && cal) {      // otwarta sesja: przelicz w nowym trybie
-    events = P.analyze(samples, cal, mode).events; renderList(); scheduleSave();
+    events = P.analyze(samples, cal, mode, { profile }).events; renderList(); scheduleSave();
   } else tick();
   renderModeTiles(null);
 });
@@ -318,7 +347,7 @@ $('btnCopy').onclick = async () => {
 $('btnCsv').onclick = async () => {
   const d0 = new Date(session ? session.startedAt : Date.now()), z = n => String(n).padStart(2, '0');
   const name = `pomiar_${d0.getFullYear()}-${z(d0.getMonth() + 1)}-${z(d0.getDate())}_${z(d0.getHours())}-${z(d0.getMinutes())}.csv`;
-  const header = '# ' + P.VERSION + ' · tryb ' + mode + (cal ? ' · pion ' + cal.u.map(v => v.toFixed(3)).join(' ') : '') + '\n# ' + resultsText().replace(/\n/g, '\n# ') + '\n';
+  const header = '# ' + P.VERSION + ' · tryb ' + mode + ' · czułość ' + profile + (cal ? ' · pion ' + cal.u.map(v => v.toFixed(3)).join(' ') : '') + '\n# ' + resultsText().replace(/\n/g, '\n# ') + '\n';
   const blob = new Blob([header + P.toCSV(samples)], { type: 'text/csv' });
   const file = new File([blob], name, { type: 'text/csv' });
   try {
@@ -334,7 +363,7 @@ function buildRec(finished) {
   if (!session) session = { id: Date.now(), startedAt: Date.now() };
   if (recording || !session.endedAt) session.endedAt = Date.now();   // otwarta sesja zachowuje swój czas
   return { id: session.id, startedAt: session.startedAt, endedAt: session.endedAt, mode, version: P.VERSION,
-           cal, calApprox, events, names, sessionStart, raw: S.pack(samples), finished };
+           cal, calApprox, profile, events, names, sessionStart, raw: S.pack(samples), finished };
 }
 async function saveNow(finished) {
   if (!session || !samples.length) return false;
@@ -388,6 +417,7 @@ async function openSession(id) {
   samples = S.unpack(rec.raw); cal = rec.cal; calApprox = !!rec.calApprox;
   events = rec.events || []; names = rec.names || {}; sessionStart = rec.sessionStart || null;
   mode = rec.mode || 'jump';
+  setProfile(rec.profile || 'standard', true);      // stare sesje liczono progami standardowymi
   document.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x.dataset.m === mode));
   $('hist').hidden = true; $('btnHist').textContent = 'Historia pomiarów';
   $('viewing').hidden = false; $('viewTxt').textContent = 'Sesja z ' + whenPL(rec.startedAt) + (rec.finished ? '' : ' (przerwana)');
@@ -399,6 +429,7 @@ function closeView() {
   if (recording) { $('viewing').hidden = true; return; }   // nigdy nie czyść trwającego nagrania
   session = null; samples = []; events = []; names = {}; cal = null; sessionStart = null;
   $('viewing').hidden = true; renderedSig = ''; renderList(); renderModeTiles(null);
+  try { setProfile(localStorage.getItem('pomiar_profile') || 'kids', true); } catch (e) { setProfile('kids', true); }
   $('hint').textContent = 'Po „Start” stań nieruchomo na sekundę — czujnik ustali, gdzie jest pion.';
 }
 $('btnCloseView').onclick = closeView;

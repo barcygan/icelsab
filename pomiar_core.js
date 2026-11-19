@@ -26,6 +26,11 @@
     clipDps: 1950,         // czujnik ±2000 °/s
     maxGapMs: 120          // większa dziura w danych (utracone pakiety) przerywa całkowanie
   };
+  // Profile czułości skoków. „Dzieci”: niższe, krótsze skoki i miękkie lądowania.
+  const PROFILES = {
+    kids:     { flightAv: 0.5, flightMinMs: 100, landingMinG: 1.35 },
+    standard: { flightAv: 0.35, flightMinMs: 150, landingMinG: 1.8 }
+  };
 
   function parsePacket(str) {
     const p = String(str).split(',');
@@ -253,7 +258,7 @@
 
   // mode: 'jump' | 'spin' | 'both'
   function analyze(samples, cal, mode, opts) {
-    const o = Object.assign({}, DEFAULTS, opts || {});
+    const o = Object.assign({}, DEFAULTS, PROFILES[(opts && opts.profile) || 'kids'], opts || {});
     if (!cal || samples.length < 10) return { events: [], live: null };
     const d = derive(samples, cal);
     let ev = [];
@@ -264,7 +269,10 @@
     const k = d.n - 1;
     let r = 0, c = 0;
     for (let i = k; i >= 0 && d.t[k] - d.t[i] <= 200; i--) { r += Math.abs(d.wv[i]); c++; }
-    return { events: ev, live: { av: d.av[k], rps: r / c / 360, inAir: d.av[k] < o.flightAv, spin: spinNow } };
+    // diagnostyka: co czujnik widział w ostatniej sekundzie
+    let avMin = Infinity, gMax = 0;
+    for (let i = k; i >= 0 && d.t[k] - d.t[i] <= 1000; i--) { if (d.av[i] < avMin) avMin = d.av[i]; if (d.amag[i] > gMax) gMax = d.amag[i]; }
+    return { events: ev, live: { av: d.av[k], rps: r / c / 360, inAir: d.av[k] < o.flightAv, spin: spinNow, avMin1s: avMin, gMax1s: gMax, thr: { flightAv: o.flightAv, landingMinG: o.landingMinG } } };
   }
 
   // ---- symulator (demo + testy) ----
@@ -299,7 +307,7 @@
         const air = s.air, wAir = s.revs * 360 / air, pre = s.pre || 0.25;
         const nPre = steps(250), nAir = steps(air * 1000), nLand = steps(200);
         for (let i = 0; i < nPre; i++) { const f = i / nPre; push(1 + 1.2 * Math.sin(Math.PI * f), 0.2, (pre * 360 / 0.25) * 2 * f * (s.sign || 1), 0.05); }
-        for (let i = 0; i < nAir; i++) push(rnd() * 0.1, 2.5, wAir * (s.sign || 1), 0.05);
+        for (let i = 0; i < nAir; i++) push((s.airAv || 0) + rnd() * 0.1, 2.5, wAir * (s.sign || 1), 0.05);
         for (let i = 0; i < nLand; i++) { const f = i / nLand; push(1 + (s.impact || 6) * Math.exp(-f * 6), 0.3, wAir * (1 - f) * 0.3 * (s.sign || 1), 0.1); }
       } else if (s.kind === 'spin') {
         const n = steps(s.ms), ramp = steps(400);
@@ -318,5 +326,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.2', DEFAULTS, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, simulate, toCSV };
+  return { VERSION: 'pomiar-0.3', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, simulate, toCSV };
 });
