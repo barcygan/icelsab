@@ -9,6 +9,7 @@
   :root { --bg:#0e1116; --card:#181c23; --card2:#20252e; --fg:#f2f4f7; --mut:#8b93a1; --line:#2a303a;
           --ok:#2fbf71; --warn:#f2a93b; --bad:#e5484d; --rec:#e5484d; --acc:#3a7bfd; }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.35 -apple-system, system-ui, sans-serif;
          padding:max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); max-width:640px; margin-inline:auto; }
   header { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
@@ -24,7 +25,11 @@
   .seg button.on { background:#2a303a; color:var(--fg); }
   #btnRec { width:100%; min-height:80px; font-size:22px; border-radius:16px; background:var(--rec); margin-bottom:10px; }
   #btnRec.stop { background:#2a303a; }
-  .live { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:8px; margin-bottom:12px; }
+  .live { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:8px; margin-bottom:8px; }
+  .live.mode .tile { background:var(--card2); }
+  .live.mode .v { font-size:22px; }
+  #modeInfo { color:var(--mut); font-size:13px; margin:-4px 2px 10px; }
+  #state.ok { color:var(--ok); } #state.spin { color:var(--acc); }
   .tile { background:var(--card); border-radius:12px; padding:10px; }
   .tile .v { font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; }
   .tile .l { color:var(--mut); font-size:12px; }
@@ -68,6 +73,7 @@
   <button data-m="spin">Piruety</button>
   <button data-m="both">Oba</button>
 </div>
+<div id="modeInfo"></div>
 
 <button id="btnRec" disabled>Start pomiaru</button>
 <p class="mut" id="hint" style="margin:0 0 10px">Po „Start” stań nieruchomo na sekundę — czujnik ustali, gdzie jest pion.</p>
@@ -77,9 +83,10 @@
 
 <div class="live">
   <div class="tile"><div class="l">Stan</div><div class="v" id="state">—</div></div>
-  <div class="tile"><div class="l">Obrót teraz</div><div class="v" id="rpsNow">—</div></div>
-  <div class="tile"><div class="l">Czas</div><div class="v" id="clock">0:00</div></div>
+  <div class="tile"><div class="l">Obr/s teraz</div><div class="v" id="rpsNow">—</div></div>
+  <div class="tile"><div class="l">Czas nagrania</div><div class="v" id="clock">0:00</div></div>
 </div>
+<div class="live mode" id="modeTiles"></div>
 
 <div id="list"><div class="empty">Brak pomiarów. Połącz czujnik, wybierz rodzaj i naciśnij Start.</div></div>
 
@@ -102,7 +109,7 @@ const fmt = (v, d = 1) => v.toFixed(d).replace('.', ',');
 $('ver').textContent = P.VERSION;
 
 let device = null, wantConnected = false, lastPacket = 0;
-let mode = 'jump', recording = false, recStart = 0, samples = [], cal = null, calApprox = false;
+let mode = 'jump', recording = false, recStart = 0, samples = [], cal = null, calApprox = false, calOkAt = null;
 let events = [], names = {}, sessionStart = null;
 let session = null;            // { id, startedAt } — sesja pokazana / nagrywana (zapisywana w historii)
 const S = window.PomiarStore;
@@ -128,6 +135,11 @@ function tick() {
       cal = P.approxCalibration(samples); calApprox = !!cal;
     }
   }
+  const hadCal = calOkAt !== null;
+  if (cal && !hadCal) {
+    calOkAt = performance.now();
+    $('hint').textContent = calApprox ? 'Pion ustalony w przybliżeniu (nie było bezruchu). Jedź.' : 'Pion ustalony — jedź i wykonuj elementy.';
+  }
   const r = P.analyze(samples, cal, mode);
   events = r.events;
   renderLive(r.live);
@@ -139,9 +151,42 @@ function renderLive(live) {
   const st = $('state');
   if (!recording) { st.textContent = '—'; st.className = 'v'; $('rpsNow').textContent = '—'; return; }
   if (!cal) { st.textContent = 'Stój…'; st.className = 'v cal'; }
-  else if (live && live.inAir) { st.textContent = 'W locie'; st.className = 'v air'; }
-  else { st.textContent = 'Lód'; st.className = 'v'; }
+  else if (performance.now() - calOkAt < 2500) { st.textContent = 'Gotowe'; st.className = 'v ok'; }
+  else if (mode !== 'spin' && live && live.inAir) { st.textContent = 'W locie'; st.className = 'v air'; }
+  else if (mode !== 'jump' && live && live.spin) { st.textContent = 'Piruet'; st.className = 'v spin'; }
+  else { st.textContent = 'Jazda'; st.className = 'v'; }
   $('rpsNow').textContent = live ? fmt(live.rps, 1) : '—';
+  renderModeTiles(live);
+}
+
+// ---------- parametry ewolucji dla wybranej zakładki ----------
+const MODE_INFO = {
+  jump: 'Skoki: obroty w powietrzu, czas lotu, wysokość, obroty na lodzie przed wybiciem, siła wybicia i lądowania, kierunek.',
+  spin: 'Piruety: liczba obrotów, czas, średnie i maks. obr/s, wykres tempa, kierunek.',
+  both: 'Skoki i piruety naraz — każdy wykryty element dostaje własną kartę z parametrami.'
+};
+function tileHTML(l, v) { return `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div></div>`; }
+function renderModeTiles(live) {
+  $('modeInfo').textContent = MODE_INFO[mode];
+  const jumps = events.filter(e => e.type === 'jump'), spins = events.filter(e => e.type === 'spin');
+  const lj = jumps[jumps.length - 1], ls = spins[spins.length - 1], dash = '—';
+  let h;
+  if (mode === 'jump') {
+    h = tileHTML(lj ? `Ostatni skok (${jumps.length})` : 'Ostatni skok', lj ? fmt(lj.revAir, 1) + ' obr' : dash)
+      + tileHTML('Czas lotu', lj ? fmt(lj.airtimeS, 2) + ' s' : dash)
+      + tileHTML('Wysokość', lj ? Math.round(lj.heightCm) + ' cm' : dash);
+  } else if (mode === 'spin') {
+    const cur = live && live.spin;
+    h = tileHTML(cur ? 'Piruet teraz' : (ls ? `Ostatni piruet (${spins.length})` : 'Piruet'),
+                 cur ? fmt(cur.revs, 1) + ' obr' : ls ? fmt(ls.revs, 1) + ' obr' : dash)
+      + tileHTML('Czas piruetu', cur ? fmt(cur.durationS, 1) + ' s' : ls ? fmt(ls.durationS, 1) + ' s' : dash)
+      + tileHTML('Śr. obr/s', cur ? fmt(cur.revs / Math.max(0.1, cur.durationS), 1) : ls ? fmt(ls.avgRps, 1) : dash);
+  } else {
+    const last = events[events.length - 1];
+    h = tileHTML('Skoki', String(jumps.length)) + tileHTML('Piruety', String(spins.length))
+      + tileHTML('Ostatni', last ? fmt(last.type === 'jump' ? last.revAir : last.revs, 1) + ' obr' : dash);
+  }
+  $('modeTiles').innerHTML = h;
 }
 
 function keyOf(e) { return e.type + Math.round(e.t0 / 100); }
@@ -152,13 +197,14 @@ function hhmmss(devMs) {
 
 let renderedSig = '';
 function renderList() {
-  const sig = events.map(e => keyOf(e) + (e.revAir || e.revs || 0).toFixed(2)).join('|') + calApprox;
+  const sig = events.map(e => keyOf(e) + (e.revAir || e.revs || 0).toFixed(2)).join('|') + calApprox + recording + !!cal;
   if (sig === renderedSig) return;           // nie przerysowuj — nie gub fokusu w polu nazwy
   renderedSig = sig;
   const list = $('list');
   $('btnCopy').disabled = events.length === 0; $('btnCsv').disabled = samples.length === 0;
   if (!events.length) {
-    list.innerHTML = `<div class="empty">${recording ? (cal ? 'Nagrywam… wykonaj skok lub piruet.' : 'Stań nieruchomo — kalibracja pionu…') : 'Brak wykrytych elementów.'}</div>`;
+    const what = mode === 'jump' ? 'skok' : mode === 'spin' ? 'piruet' : 'skok lub piruet';
+    list.innerHTML = `<div class="empty">${recording ? (cal ? 'Nagrywam… wykonaj ' + what + '.' : 'Stań nieruchomo na sekundę — ustalam pion…') : (session ? 'Brak wykrytych elementów.' : 'Brak pomiarów. Połącz czujnik, wybierz rodzaj i naciśnij Start.')}</div>`;
     return;
   }
   list.innerHTML = '';
@@ -220,11 +266,12 @@ document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
   if (!recording && samples.length && cal) {      // otwarta sesja: przelicz w nowym trybie
     events = P.analyze(samples, cal, mode).events; renderList(); scheduleSave();
   } else tick();
+  renderModeTiles(null);
 });
 
 $('btnRec').onclick = () => {
   if (!recording) {
-    samples = []; cal = null; calApprox = false; events = []; names = {}; renderedSig = ''; sessionStart = null;
+    samples = []; cal = null; calApprox = false; events = []; names = {}; renderedSig = ''; sessionStart = null; calOkAt = null;
     recording = true; recStart = performance.now();
     session = { id: Date.now(), startedAt: Date.now() };
     $('viewing').hidden = true; $('hist').hidden = true; $('btnHist').disabled = true;
@@ -234,6 +281,7 @@ $('btnRec').onclick = () => {
   } else {
     tick();                       // ostatnia analiza całego nagrania
     recording = false;
+    if (!session) session = { id: Date.now(), startedAt: Date.now() - (performance.now() - recStart) };
     session.endedAt = Date.now();
     saveNow(true).then(ok => { if (ok) $('hint').textContent += ' Zapisano w historii.'; });
     $('btnHist').disabled = false;
@@ -278,6 +326,7 @@ $('btnCsv').onclick = async () => {
 // ---------- historia (IndexedDB w telefonie) ----------
 let lastAutosave = 0, saveTimer = null;
 function buildRec(finished) {
+  if (!session) session = { id: Date.now(), startedAt: Date.now() };
   if (recording || !session.endedAt) session.endedAt = Date.now();   // otwarta sesja zachowuje swój czas
   return { id: session.id, startedAt: session.startedAt, endedAt: session.endedAt, mode, version: P.VERSION,
            cal, calApprox, events, names, sessionStart, raw: S.pack(samples), finished };
@@ -338,12 +387,13 @@ async function openSession(id) {
   $('hist').hidden = true; $('btnHist').textContent = 'Historia pomiarów';
   $('viewing').hidden = false; $('viewTxt').textContent = 'Sesja z ' + whenPL(rec.startedAt) + (rec.finished ? '' : ' (przerwana)');
   $('hint').textContent = 'Możesz dopisać nazwy, zmienić tryb (przeliczy) i zapisać CSV.';
-  renderedSig = ''; renderList();
+  renderedSig = ''; renderList(); renderModeTiles(null);
   scrollTo({ top: 0 });
 }
 function closeView() {
+  if (recording) { $('viewing').hidden = true; return; }   // nigdy nie czyść trwającego nagrania
   session = null; samples = []; events = []; names = {}; cal = null; sessionStart = null;
-  $('viewing').hidden = true; renderedSig = ''; renderList();
+  $('viewing').hidden = true; renderedSig = ''; renderList(); renderModeTiles(null);
   $('hint').textContent = 'Po „Start” stań nieruchomo na sekundę — czujnik ustali, gdzie jest pion.';
 }
 $('btnCloseView').onclick = closeView;
@@ -364,6 +414,7 @@ async function connectGatt() {
   ch.addEventListener('characteristicvaluechanged', onPacket);
   await ch.startNotifications();
   status('ok', 'Połączony', device.name || ''); $('btnRec').disabled = false;
+  if (!recording) $('hint').textContent = 'Wybierz rodzaj i naciśnij Start. Potem stań nieruchomo na sekundę.';
 }
 async function onDisconnected() {
   status('bad', 'Rozłączony', wantConnected ? 'Łączę ponownie… (nagranie trwa, dziura w danych)' : '');
@@ -414,6 +465,7 @@ if (demo !== null) {
   }, 50);
 } else if (!navigator.bluetooth) status('warn', 'Ta przeglądarka nie ma Bluetooth', 'iPhone: Bluefy · Mac/Android: Chrome');
 
+renderModeTiles(null);
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>

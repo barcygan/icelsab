@@ -202,7 +202,11 @@
         } else { below = null; e = k; }
       }
       i = e + 1;
-      if (below === null || d.t[n - 1] - d.t[e] < 300) break; // piruet trwa — poczekaj
+      if (below === null || d.t[n - 1] - d.t[e] < 300) {     // piruet trwa — poczekaj, ale pokaż na żywo
+        const durNow = (d.t[n - 1] - d.t[s]) / 1000;
+        if (durNow >= 1.0) out.ongoing = { t0: d.t[s], durationS: durNow, revs: integrate(d, s, n - 1, o.maxGapMs, true) / 360 };
+        break;
+      }
       const dur = (d.t[e] - d.t[s]) / 1000;
       if (dur < o.spinMinS) continue;
       const deg = integrate(d, s, e, o.maxGapMs, true);
@@ -238,12 +242,13 @@
     const d = derive(samples, cal);
     let ev = [];
     if (mode !== 'spin') ev = ev.concat(findJumps(d, o));
-    if (mode !== 'jump') ev = ev.concat(findSpins(d, o));
+    let spinNow = null;
+    if (mode !== 'jump') { const sp = findSpins(d, o); spinNow = sp.ongoing || null; ev = ev.concat(sp); }
     ev.sort((x, y) => x.t0 - y.t0);
     const k = d.n - 1;
     let r = 0, c = 0;
     for (let i = k; i >= 0 && d.t[k] - d.t[i] <= 200; i--) { r += Math.abs(d.wv[i]); c++; }
-    return { events: ev, live: { av: d.av[k], rps: r / c / 360, inAir: d.av[k] < o.flightAv } };
+    return { events: ev, live: { av: d.av[k], rps: r / c / 360, inAir: d.av[k] < o.flightAv, spin: spinNow } };
   }
 
   // ---- symulator (demo + testy) ----
@@ -297,5 +302,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.1', DEFAULTS, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, simulate, toCSV };
+  return { VERSION: 'pomiar-0.2', DEFAULTS, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, simulate, toCSV };
 });
