@@ -1,6 +1,7 @@
 # OpenCARV — podgląd czujnika (GitHub Pages)
 
 - `index.html` — podgląd czujnika: osie, obroty, obr/s, przeciążenie, czas lotu.
+- `pomiar.html` + `pomiar_core.js` — pomiar z samego czujnika: skoki (obroty w powietrzu, czas lotu, wysokość, uderzenia) i piruety (obroty, tempo). Demo bez czujnika: `pomiar.html?demo=5`. Testy: `node tests/test_pomiar.js`.
 - `zasieg.html` — test zasięgu Bluetooth: sygnał, pakiety/s, straty, punkty z odległością.
 
 Na iPhonie otwierać w przeglądarce **Bluefy** (Safari nie ma Web Bluetooth). Po pierwszym

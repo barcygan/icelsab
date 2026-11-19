@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pomiar z czujnika</title>
+<style>
+  :root { --bg:#0e1116; --card:#181c23; --card2:#20252e; --fg:#f2f4f7; --mut:#8b93a1; --line:#2a303a;
+          --ok:#2fbf71; --warn:#f2a93b; --bad:#e5484d; --rec:#e5484d; --acc:#3a7bfd; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.35 -apple-system, system-ui, sans-serif;
+         padding:max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); max-width:640px; margin-inline:auto; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .dot { width:14px; height:14px; border-radius:50%; background:var(--mut); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  #st { font-weight:600; } #sub, .mut { color:var(--mut); font-size:13px; }
+  button { min-height:48px; border:0; border-radius:12px; font-size:16px; font-weight:600; color:#fff; background:var(--acc); padding:0 16px; font-family:inherit; }
+  button.sec { background:#2a303a; }
+  button:disabled { opacity:.45; }
+  .full { width:100%; margin-bottom:10px; }
+  .seg { display:grid; grid-template-columns:repeat(3,1fr); background:var(--card); border-radius:12px; padding:4px; gap:4px; margin-bottom:10px; }
+  .seg button { background:transparent; color:var(--mut); min-height:44px; }
+  .seg button.on { background:#2a303a; color:var(--fg); }
+  #btnRec { width:100%; min-height:80px; font-size:22px; border-radius:16px; background:var(--rec); margin-bottom:10px; }
+  #btnRec.stop { background:#2a303a; }
+  .live { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:8px; margin-bottom:12px; }
+  .tile { background:var(--card); border-radius:12px; padding:10px; }
+  .tile .v { font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .tile .l { color:var(--mut); font-size:12px; }
+  #state.air { color:var(--warn); } #state.cal { color:var(--warn); }
+  .ev { background:var(--card); border-radius:14px; padding:12px; margin-bottom:10px; }
+  .ev .top { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  .ev .kind { font-weight:700; }
+  .ev .main { font-size:34px; font-weight:800; font-variant-numeric:tabular-nums; margin:2px 0 6px; }
+  .ev .main small { font-size:15px; font-weight:600; color:var(--mut); }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .grid3 div { background:var(--card2); border-radius:10px; padding:6px 8px; font-variant-numeric:tabular-nums; font-weight:700; }
+  .grid3 span { display:block; font-size:11px; color:var(--mut); font-weight:500; }
+  .warnline { color:var(--warn); font-size:13px; margin-top:6px; }
+  .ev input { width:100%; margin-top:8px; min-height:40px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--fg); font-size:15px; padding:0 10px; }
+  canvas.spark { width:100%; height:44px; display:block; margin-top:6px; }
+  .row { display:flex; gap:8px; } .row button { flex:1; }
+  .empty { color:var(--mut); text-align:center; padding:24px 8px; }
+  a { color:#5b9dff; }
+</style>
+<link rel="manifest" href="manifest.json">
+</head>
+<body>
+<script>window.onerror=function(m,u,l){var d=document.createElement("pre");d.style.cssText="white-space:pre-wrap;color:#fff;background:#e5484d;padding:10px;border-radius:10px";d.textContent="Błąd JS: "+m+" (linia "+l+")";document.body.prepend(d);};</script>
+<header>
+  <span class="dot" id="dot"></span>
+  <div style="flex:1"><div id="st">Rozłączony</div><div id="sub">Kliknij „Połącz”</div></div>
+</header>
+<button id="btnConnect" class="full">Połącz z czujnikiem</button>
+
+<div class="seg" id="mode">
+  <button data-m="jump" class="on">Skoki</button>
+  <button data-m="spin">Piruety</button>
+  <button data-m="both">Oba</button>
+</div>
+
+<button id="btnRec" disabled>Start pomiaru</button>
+<p class="mut" id="hint" style="margin:0 0 10px">Po „Start” stań nieruchomo na sekundę — czujnik ustali, gdzie jest pion.</p>
+
+<div class="live">
+  <div class="tile"><div class="l">Stan</div><div class="v" id="state">—</div></div>
+  <div class="tile"><div class="l">Obrót teraz</div><div class="v" id="rpsNow">—</div></div>
+  <div class="tile"><div class="l">Czas</div><div class="v" id="clock">0:00</div></div>
+</div>
+
+<div id="list"><div class="empty">Brak pomiarów. Połącz czujnik, wybierz rodzaj i naciśnij Start.</div></div>
+
+<div class="row" style="margin:6px 0 10px">
+  <button class="sec" id="btnCopy" disabled>Kopiuj wyniki</button>
+  <button class="sec" id="btnCsv" disabled>Zapisz dane (CSV)</button>
+</div>
+<p class="mut">Mierzy czujnik na bucie: obroty wokół pionu, czas lotu (wysokość = g·t²/8), uderzenia.
+Nazwę elementu wpisuje trener. Żyroskop ±2000 °/s ≈ 5,5 obr/s — szybsze obroty są oznaczane jako „poza zakresem”.</p>
+<p class="mut"><a href="index.html">Podgląd czujnika</a> · <a href="zasieg.html">Test zasięgu</a> · <span id="ver"></span></p>
+
+<script src="pomiar_core.js"></script>
+<script>
+const SERVICE = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const CHAR    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+const P = window.PomiarCore;
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 1) => v.toFixed(d).replace('.', ',');
+$('ver').textContent = P.VERSION;
+
+let device = null, wantConnected = false, lastPacket = 0;
+let mode = 'jump', recording = false, recStart = 0, samples = [], cal = null, calApprox = false;
+let events = [], names = {}, sessionStart = null;
+
+function status(cls, text, sub) { $('dot').className = 'dot ' + cls; $('st').textContent = text; $('sub').textContent = sub || ''; }
+
+// ---------- dane ----------
+function onSample(s) {
+  lastPacket = performance.now();
+  if (!recording) return;
+  // restart płytki (czas urządzenia cofnął się) — zaczynamy ciągłość od nowa
+  if (samples.length && s.t <= samples[samples.length - 1].t) return;
+  samples.push(s);
+}
+function onPacket(ev) { const s = P.parsePacket(new TextDecoder().decode(ev.target.value)); if (s) onSample(s); }
+
+// ---------- analiza (co 0,5 s całe nagranie; zdarzenia są stabilne) ----------
+function tick() {
+  if (!recording) return;
+  if (!cal && samples.length) {
+    cal = P.findCalibration(samples);
+    if (!cal && samples[samples.length - 1].t - samples[0].t > 6000) {
+      cal = P.approxCalibration(samples); calApprox = !!cal;
+    }
+  }
+  const r = P.analyze(samples, cal, mode);
+  events = r.events;
+  renderLive(r.live);
+  renderList();
+}
+setInterval(tick, 500);
+
+function renderLive(live) {
+  const st = $('state');
+  if (!recording) { st.textContent = '—'; st.className = 'v'; $('rpsNow').textContent = '—'; return; }
+  if (!cal) { st.textContent = 'Stój…'; st.className = 'v cal'; }
+  else if (live && live.inAir) { st.textContent = 'W locie'; st.className = 'v air'; }
+  else { st.textContent = 'Lód'; st.className = 'v'; }
+  $('rpsNow').textContent = live ? fmt(live.rps, 1) : '—';
+}
+
+function keyOf(e) { return e.type + Math.round(e.t0 / 100); }
+function hhmmss(devMs) {
+  if (sessionStart === null) return '';
+  return new Date(sessionStart.wall + (devMs - sessionStart.dev)).toLocaleTimeString('pl-PL');
+}
+
+let renderedSig = '';
+function renderList() {
+  const sig = events.map(e => keyOf(e) + (e.revAir || e.revs || 0).toFixed(2)).join('|') + calApprox;
+  if (sig === renderedSig) return;           // nie przerysowuj — nie gub fokusu w polu nazwy
+  renderedSig = sig;
+  const list = $('list');
+  $('btnCopy').disabled = events.length === 0; $('btnCsv').disabled = samples.length === 0;
+  if (!events.length) {
+    list.innerHTML = `<div class="empty">${recording ? (cal ? 'Nagrywam… wykonaj skok lub piruet.' : 'Stań nieruchomo — kalibracja pionu…') : 'Brak wykrytych elementów.'}</div>`;
+    return;
+  }
+  list.innerHTML = '';
+  let nj = 0, ns = 0;
+  const numbered = events.map(e => ({ e, n: e.type === 'jump' ? ++nj : ++ns }));
+  for (const { e, n } of numbered.reverse()) {
+    const div = document.createElement('div'); div.className = 'ev';
+    const dir = e.dir === 'L' ? 'w lewo' : 'w prawo';
+    if (e.type === 'jump') {
+      div.innerHTML = `
+        <div class="top"><span class="kind">Skok ${n}</span><span class="mut">${hhmmss(e.t0)} · ${dir}</span></div>
+        <div class="main">${fmt(e.revAir, 1)} <small>obr. w powietrzu</small></div>
+        <div class="grid3">
+          <div>${fmt(e.airtimeS, 2)} s<span>czas lotu</span></div>
+          <div>${Math.round(e.heightCm)} cm<span>wysokość</span></div>
+          <div>${fmt(e.maxRps, 1)}<span>max obr/s</span></div>
+          <div>${fmt(e.revPre, 2)}<span>obr. na lodzie przed</span></div>
+          <div>${fmt(e.takeoffG, 1)} g<span>wybicie</span></div>
+          <div>${fmt(e.landingG, 1)} g<span>lądowanie</span></div>
+        </div>`;
+    } else {
+      div.innerHTML = `
+        <div class="top"><span class="kind">Piruet ${n}</span><span class="mut">${hhmmss(e.t0)} · ${dir}</span></div>
+        <div class="main">${fmt(e.revs, 1)} <small>obr.</small></div>
+        <div class="grid3">
+          <div>${fmt(e.durationS, 1)} s<span>czas</span></div>
+          <div>${fmt(e.avgRps, 1)}<span>śr. obr/s</span></div>
+          <div>${fmt(e.maxRps, 1)}<span>max obr/s</span></div>
+        </div>
+        <canvas class="spark"></canvas>`;
+    }
+    if (e.clipped) div.insertAdjacentHTML('beforeend', '<div class="warnline">Poza zakresem żyroskopu (&gt; 2000 °/s) — obroty zaniżone.</div>');
+    if (calApprox) div.insertAdjacentHTML('beforeend', '<div class="warnline">Kalibracja przybliżona (brak bezruchu na starcie).</div>');
+    const inp = document.createElement('input');
+    inp.placeholder = 'Nazwa (opcjonalnie), np. 2S, Axel';
+    const k = keyOf(e); inp.value = names[k] || '';
+    inp.oninput = () => { names[k] = inp.value; };
+    div.appendChild(inp);
+    list.appendChild(div);
+    if (e.type === 'spin') drawSpark(div.querySelector('canvas'), e.tempo);
+  }
+}
+
+function drawSpark(cv, vals) {
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const c = cv.getContext('2d'); c.scale(dpr, dpr);
+  const m = Math.max(1, ...vals), bw = w / vals.length;
+  c.fillStyle = '#3a7bfd';
+  vals.forEach((v, i) => { const bh = v / m * (h - 12); c.fillRect(i * bw + 0.5, h - bh, Math.max(1, bw - 1), bh); });
+  c.fillStyle = '#8b93a1'; c.font = '10px -apple-system, sans-serif'; c.fillText('obr/s w czasie · max ' + fmt(m, 1), 2, 10);
+}
+
+// ---------- sterowanie ----------
+document.querySelectorAll('#mode button').forEach(b => b.onclick = () => {
+  mode = b.dataset.m;
+  document.querySelectorAll('#mode button').forEach(x => x.classList.toggle('on', x === b));
+  renderedSig = ''; tick();
+});
+
+$('btnRec').onclick = () => {
+  if (!recording) {
+    samples = []; cal = null; calApprox = false; events = []; names = {}; renderedSig = ''; sessionStart = null;
+    recording = true; recStart = performance.now();
+    if (window.demoRestart) window.demoRestart();
+    $('btnRec').textContent = 'Stop'; $('btnRec').classList.add('stop');
+    $('hint').textContent = 'Stań nieruchomo na sekundę… potem jedź.';
+  } else {
+    tick();                       // ostatnia analiza całego nagrania
+    recording = false;
+    $('btnRec').textContent = 'Start pomiaru'; $('btnRec').classList.remove('stop');
+    $('hint').textContent = `Zapisano ${events.length} elementów, ${samples.length} próbek. Nowy „Start” czyści listę.`;
+    renderedSig = ''; renderList(); renderLive(null);
+  }
+};
+// pierwszy pakiet nagrania → powiązanie czasu płytki z zegarem
+setInterval(() => {
+  if (recording && sessionStart === null && samples.length) sessionStart = { dev: samples[0].t, wall: Date.now() - (performance.now() - lastPacket) };
+  if (recording) { const s = Math.floor((performance.now() - recStart) / 1000); $('clock').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+}, 250);
+
+function resultsText() {
+  let nj = 0, ns = 0;
+  return events.map(e => {
+    const nm = names[keyOf(e)] ? ` [${names[keyOf(e)]}]` : '';
+    if (e.type === 'jump') return `Skok ${++nj}${nm} ${hhmmss(e.t0)}: ${fmt(e.revAir, 2)} obr w powietrzu (+${fmt(e.revPre, 2)} na lodzie), lot ${fmt(e.airtimeS, 2)} s, ${Math.round(e.heightCm)} cm, max ${fmt(e.maxRps, 1)} obr/s, wybicie ${fmt(e.takeoffG, 1)} g, lądowanie ${fmt(e.landingG, 1)} g${e.clipped ? ', POZA ZAKRESEM' : ''}`;
+    return `Piruet ${++ns}${nm} ${hhmmss(e.t0)}: ${fmt(e.revs, 1)} obr, ${fmt(e.durationS, 1)} s, śr. ${fmt(e.avgRps, 1)} obr/s, max ${fmt(e.maxRps, 1)}${e.clipped ? ', POZA ZAKRESEM' : ''}`;
+  }).join('\n');
+}
+$('btnCopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(resultsText()); $('btnCopy').textContent = 'Skopiowano'; }
+  catch (e) { $('btnCopy').textContent = 'Nie udało się'; }
+  setTimeout(() => $('btnCopy').textContent = 'Kopiuj wyniki', 1500);
+};
+$('btnCsv').onclick = async () => {
+  const name = 'pomiar_' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.csv';
+  const header = '# ' + P.VERSION + ' · tryb ' + mode + (cal ? ' · pion ' + cal.u.map(v => v.toFixed(3)).join(' ') : '') + '\n# ' + resultsText().replace(/\n/g, '\n# ') + '\n';
+  const blob = new Blob([header + P.toCSV(samples)], { type: 'text/csv' });
+  const file = new File([blob], name, { type: 'text/csv' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+
+// ---------- Bluetooth ----------
+async function connectGatt() {
+  status('warn', 'Łączenie…', device.name || '');
+  const server = await device.gatt.connect();
+  const ch = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CHAR);
+  ch.addEventListener('characteristicvaluechanged', onPacket);
+  await ch.startNotifications();
+  status('ok', 'Połączony', device.name || ''); $('btnRec').disabled = false;
+}
+async function onDisconnected() {
+  status('bad', 'Rozłączony', wantConnected ? 'Łączę ponownie… (nagranie trwa, dziura w danych)' : '');
+  while (wantConnected && device && !device.gatt.connected) {
+    try { await connectGatt(); return; } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+  }
+}
+$('btnConnect').onclick = async () => {
+  if (device && device.gatt.connected) {
+    wantConnected = false; device.gatt.disconnect(); $('btnConnect').textContent = 'Połącz z czujnikiem'; status('', 'Rozłączony', ''); return;
+  }
+  if (!navigator.bluetooth) { status('bad', 'Brak Bluetooth w tej przeglądarce', 'iPhone: Bluefy · Mac/Android: Chrome'); return; }
+  try {
+    if (!device) {
+      device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }, { name: 'OpenCARV_Sensor' }], optionalServices: [SERVICE] });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+    }
+    wantConnected = true; await connectGatt(); $('btnConnect').textContent = 'Rozłącz';
+  } catch (e) { status('bad', 'Nie udało się połączyć', e.message); }
+};
+setInterval(() => {
+  if (device && device.gatt.connected && lastPacket && performance.now() - lastPacket > 1000) status('warn', 'Połączony, brak danych', 'Sygnał na granicy zasięgu?');
+  else if (device && device.gatt.connected) status('ok', 'Połączony', device.name || '');
+}, 500);
+
+// ---------- demo bez czujnika: pomiar.html?demo  (lub ?demo=5 — 5× szybciej) ----------
+const demo = new URLSearchParams(location.search).get('demo');
+if (demo !== null) {
+  const speed = Math.max(1, +demo || 1);
+  const sim = P.simulate([
+    { kind: 'still', ms: 1500 }, { kind: 'glide', ms: 2000 },
+    { kind: 'jump', revs: 1.0, air: 0.40 }, { kind: 'glide', ms: 2500 },
+    { kind: 'jump', revs: 1.85, air: 0.48, pre: 0.3 }, { kind: 'glide', ms: 2000 },
+    { kind: 'spin', ms: 6000, rps: 2.6 }, { kind: 'glide', ms: 2000 },
+    { kind: 'jump', revs: 3.5, air: 0.52 }, { kind: 'glide', ms: 3000 }
+  ]);
+  status('ok', 'Demo (symulacja)', 'bez czujnika · ' + speed + '×');
+  $('btnConnect').style.display = 'none'; $('btnRec').disabled = false;
+  let i = 0, off = 0;
+  const span = sim[sim.length - 1].t - sim[0].t + 10;
+  window.demoRestart = () => { off += span; i = 0; };
+  setInterval(() => {
+    const n = Math.round(5 * speed);
+    for (let k = 0; k < n; k++, i++) {
+      if (i >= sim.length) { i = 0; off += span; }     // zapętlenie, czas płytki rośnie dalej
+      onSample({ ...sim[i], t: sim[i].t + off });
+    }
+  }, 50);
+} else if (!navigator.bluetooth) status('warn', 'Ta przeglądarka nie ma Bluetooth', 'iPhone: Bluefy · Mac/Android: Chrome');
+
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
