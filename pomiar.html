@@ -161,8 +161,8 @@ function renderLive(live) {
 
 // ---------- parametry ewolucji dla wybranej zakładki ----------
 const MODE_INFO = {
-  jump: 'Skoki: obroty w powietrzu, czas lotu, wysokość, obroty na lodzie przed wybiciem, siła wybicia i lądowania, kierunek.',
-  spin: 'Piruety: liczba obrotów, czas, średnie i maks. obr/s, wykres tempa, kierunek.',
+  jump: 'Skoki: obroty w powietrzu, czas lotu, wysokość, maks. i śr. obr/s, obroty na lodzie przed i po, siła wybicia i lądowania.',
+  spin: 'Piruety: obroty, czas, maks. i śr. obr/s, pochylenie osi, równość tempa, wykres tempa, kierunek.',
   both: 'Skoki i piruety naraz — każdy wykryty element dostaje własną kartę z parametrami.'
 };
 function tileHTML(l, v) { return `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div></div>`; }
@@ -173,8 +173,8 @@ function renderModeTiles(live) {
   let h;
   if (mode === 'jump') {
     h = tileHTML(lj ? `Ostatni skok (${jumps.length})` : 'Ostatni skok', lj ? fmt(lj.revAir, 1) + ' obr' : dash)
-      + tileHTML('Czas lotu', lj ? fmt(lj.airtimeS, 2) + ' s' : dash)
-      + tileHTML('Wysokość', lj ? Math.round(lj.heightCm) + ' cm' : dash);
+      + tileHTML('Wysokość', lj ? Math.round(lj.heightCm) + ' cm' : dash)
+      + tileHTML('Max obr/s', lj ? fmt(lj.maxRps, 1) : dash);
   } else if (mode === 'spin') {
     const cur = live && live.spin;
     h = tileHTML(cur ? 'Piruet teraz' : (ls ? `Ostatni piruet (${spins.length})` : 'Piruet'),
@@ -221,7 +221,9 @@ function renderList() {
           <div>${fmt(e.airtimeS, 2)} s<span>czas lotu</span></div>
           <div>${Math.round(e.heightCm)} cm<span>wysokość</span></div>
           <div>${fmt(e.maxRps, 1)}<span>max obr/s</span></div>
+          <div>${fmt(e.avgRps || e.revAir / e.airtimeS, 1)}<span>śr. obr/s w locie</span></div>
           <div>${fmt(e.revPre, 2)}<span>obr. na lodzie przed</span></div>
+          <div>${fmt(e.revPost || 0, 2)}<span>obr. po lądowaniu</span></div>
           <div>${fmt(e.takeoffG, 1)} g<span>wybicie</span></div>
           <div>${fmt(e.landingG, 1)} g<span>lądowanie</span></div>
         </div>`;
@@ -233,6 +235,9 @@ function renderList() {
           <div>${fmt(e.durationS, 1)} s<span>czas</span></div>
           <div>${fmt(e.avgRps, 1)}<span>śr. obr/s</span></div>
           <div>${fmt(e.maxRps, 1)}<span>max obr/s</span></div>
+          <div>${e.axisTiltDeg != null ? Math.round(e.axisTiltDeg) + '°' : '—'}<span>pochylenie osi</span></div>
+          <div>${e.tempoVarPct != null ? '±' + Math.round(e.tempoVarPct) + '%' : '—'}<span>równość tempa</span></div>
+          <div>${e.dir === 'L' ? 'lewo' : 'prawo'}<span>kierunek</span></div>
         </div>
         <canvas class="spark"></canvas>`;
     }
@@ -301,8 +306,8 @@ function resultsText() {
   let nj = 0, ns = 0;
   return events.map(e => {
     const nm = names[keyOf(e)] ? ` [${names[keyOf(e)]}]` : '';
-    if (e.type === 'jump') return `Skok ${++nj}${nm} ${hhmmss(e.t0)}: ${fmt(e.revAir, 2)} obr w powietrzu (+${fmt(e.revPre, 2)} na lodzie), lot ${fmt(e.airtimeS, 2)} s, ${Math.round(e.heightCm)} cm, max ${fmt(e.maxRps, 1)} obr/s, wybicie ${fmt(e.takeoffG, 1)} g, lądowanie ${fmt(e.landingG, 1)} g${e.clipped ? ', POZA ZAKRESEM' : ''}`;
-    return `Piruet ${++ns}${nm} ${hhmmss(e.t0)}: ${fmt(e.revs, 1)} obr, ${fmt(e.durationS, 1)} s, śr. ${fmt(e.avgRps, 1)} obr/s, max ${fmt(e.maxRps, 1)}${e.clipped ? ', POZA ZAKRESEM' : ''}`;
+    if (e.type === 'jump') return `Skok ${++nj}${nm} ${hhmmss(e.t0)}: ${fmt(e.revAir, 2)} obr w powietrzu (+${fmt(e.revPre, 2)} na lodzie), lot ${fmt(e.airtimeS, 2)} s, ${Math.round(e.heightCm)} cm, max ${fmt(e.maxRps, 1)} obr/s, śr. ${fmt(e.avgRps || 0, 1)} obr/s, wybicie ${fmt(e.takeoffG, 1)} g, lądowanie ${fmt(e.landingG, 1)} g${e.clipped ? ', POZA ZAKRESEM' : ''}`;
+    return `Piruet ${++ns}${nm} ${hhmmss(e.t0)}: ${fmt(e.revs, 1)} obr, ${fmt(e.durationS, 1)} s, śr. ${fmt(e.avgRps, 1)} obr/s, max ${fmt(e.maxRps, 1)}${e.axisTiltDeg != null ? ', oś ' + Math.round(e.axisTiltDeg) + '°' : ''}${e.tempoVarPct != null ? ', tempo ±' + Math.round(e.tempoVarPct) + '%' : ''}${e.clipped ? ', POZA ZAKRESEM' : ''}`;
   }).join('\n');
 }
 $('btnCopy').onclick = async () => {

@@ -89,7 +89,7 @@
   function derive(samples, cal) {
     const n = samples.length;
     const t = new Float64Array(n), av = new Float64Array(n), wv = new Float64Array(n),
-          amag = new Float64Array(n), wpeak = new Float64Array(n);
+          amag = new Float64Array(n), wpeak = new Float64Array(n), wh = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       const s = samples[i];
       t[i] = s.t;
@@ -97,8 +97,10 @@
       wv[i] = (s.w[0] - cal.bias[0]) * cal.u[0] + (s.w[1] - cal.bias[1]) * cal.u[1] + (s.w[2] - cal.bias[2]) * cal.u[2];
       amag[i] = norm(s.a) / cal.g0;
       wpeak[i] = Math.max(Math.abs(s.w[0]), Math.abs(s.w[1]), Math.abs(s.w[2]));
+      const w0 = s.w[0] - cal.bias[0], w1 = s.w[1] - cal.bias[1], w2 = s.w[2] - cal.bias[2];
+      wh[i] = Math.sqrt(Math.max(0, w0 * w0 + w1 * w1 + w2 * w2 - wv[i] * wv[i]));   // obrót wokół osi poziomej
     }
-    return { t, av, wv, amag, wpeak, n };
+    return { t, av, wv, amag, wpeak, wh, n };
   }
 
   // ∫ wv dt w przedziale indeksów [i0, i1] (trapezy, dziury w danych pomijane) → stopnie
@@ -170,6 +172,7 @@
         revPost: Math.abs(postDeg) / 360,
         dir: airDeg >= 0 ? 'L' : 'P',                  // L = przeciwnie do zegara (patrząc z góry)
         maxRps: wMax / 360,
+        avgRps: Math.abs(airDeg) / 360 / sec,          // średnia prędkość obrotu w powietrzu
         takeoffG: maxIn(d.amag, d, tTake - 300, tTake),
         landingG: landG,
         clipped: maxIn(d.wpeak, d, tTake - 200, tLand + 200) > o.clipDps
@@ -220,8 +223,21 @@
         for (let k = s; k <= e; k++) if (d.t[k] >= tA && d.t[k] < tA + 250) { sm += rps[k]; c++; }
         tempo.push(c ? sm / c : 0);
       }
+      // pochylenie osi obrotu względem pionu (0° = idealnie pionowa oś buta)
+      let sV = 0, sH = 0;
+      for (let k = s; k <= e; k++) { sV += Math.abs(d.wv[k]); sH += d.wh[k]; }
+      const axisTiltDeg = Math.atan2(sH, sV) * 180 / Math.PI;
+      // równość tempa: zmienność obr/s bez wejścia i wyjścia (po 0,5 s)
+      const core = tempo.slice(2, Math.max(2, tempo.length - 2));
+      let tempoVarPct = null;
+      if (core.length >= 3) {
+        const m = core.reduce((a, b) => a + b, 0) / core.length;
+        const sd = Math.sqrt(core.reduce((a, b) => a + (b - m) * (b - m), 0) / core.length);
+        tempoVarPct = m > 0 ? sd / m * 100 : null;
+      }
       out.push({
         type: 'spin',
+        axisTiltDeg, tempoVarPct,
         t0: d.t[s], t1: d.t[e],
         durationS: dur,
         revs: deg / 360,
