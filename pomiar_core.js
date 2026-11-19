@@ -256,6 +256,21 @@
     return out;
   }
 
+  // Przebiegi do wykresu skoku: g w pionie, uderzenie |a|, obr/s wokół pionu (ze znakiem) w oknie [tA, tB]
+  function trace(samples, cal, tA, tB) {
+    const out = { t: [], av: [], g: [], rps: [] };
+    if (!cal) return out;
+    for (const s of samples) {
+      if (s.t < tA) continue;
+      if (s.t > tB) break;
+      out.t.push(s.t);
+      out.av.push(dot(s.a, cal.u) / cal.g0);
+      out.g.push(norm(s.a) / cal.g0);
+      out.rps.push(((s.w[0] - cal.bias[0]) * cal.u[0] + (s.w[1] - cal.bias[1]) * cal.u[1] + (s.w[2] - cal.bias[2]) * cal.u[2]) / 360);
+    }
+    return out;
+  }
+
   // mode: 'jump' | 'spin' | 'both'
   function analyze(samples, cal, mode, opts) {
     const o = Object.assign({}, DEFAULTS, PROFILES[(opts && opts.profile) || 'kids'], opts || {});
@@ -326,5 +341,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.3', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, simulate, toCSV };
+  return { VERSION: 'pomiar-0.3', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
 });

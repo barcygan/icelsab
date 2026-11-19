@@ -48,6 +48,7 @@
   .warnline { color:var(--warn); font-size:13px; margin-top:6px; }
   .ev input { width:100%; margin-top:8px; min-height:40px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--fg); font-size:15px; padding:0 10px; }
   canvas.spark { width:100%; height:44px; display:block; margin-top:6px; }
+  canvas.jchart { width:100%; height:150px; display:block; margin-top:8px; background:var(--bg); border-radius:10px; }
   .row { display:flex; gap:8px; } .row button { flex:1; }
   .empty { color:var(--mut); text-align:center; padding:24px 8px; }
   a { color:#5b9dff; }
@@ -159,7 +160,7 @@ setInterval(tick, 500);
 
 function renderLive(live) {
   const st = $('state');
-  if (!recording) { st.textContent = '—'; st.className = 'v'; $('rpsNow').textContent = '—'; return; }
+  if (!recording) { st.textContent = '—'; st.className = 'v'; $('rpsNow').textContent = '—'; $('diag').textContent = ''; return; }
   if (!cal) { st.textContent = 'Stój…'; st.className = 'v cal'; }
   else if (performance.now() - calOkAt < 2500) { st.textContent = 'Gotowe'; st.className = 'v ok'; }
   else if (mode !== 'spin' && live && live.inAir) { st.textContent = 'W locie'; st.className = 'v air'; }
@@ -171,7 +172,7 @@ function renderLive(live) {
 }
 function renderDiag(live) {
   const el = $('diag');
-  if (!live || !live.thr || mode === 'spin') { el.textContent = ''; return; }
+  if (!recording || !live || !live.thr || mode === 'spin') { el.textContent = ''; return; }
   const air = live.avMin1s < live.thr.flightAv, hit = live.gMax1s >= live.thr.landingMinG;
   el.innerHTML = `Czujnik, ostatnia 1 s: pion min <b class="${air ? 'hit' : ''}">${fmt(live.avMin1s, 2)} g</b> (lot &lt; ${fmt(live.thr.flightAv, 2)})`
     + ` · uderzenie max <b class="${hit ? 'hit' : ''}">${fmt(live.gMax1s, 1)} g</b> (lądowanie ≥ ${fmt(live.thr.landingMinG, 2)})`;
@@ -255,7 +256,8 @@ function renderList() {
           <div>${fmt(e.revPost || 0, 2)}<span>obr. po lądowaniu</span></div>
           <div>${fmt(e.takeoffG, 1)} g<span>wybicie</span></div>
           <div>${fmt(e.landingG, 1)} g<span>lądowanie</span></div>
-        </div>`;
+        </div>
+        <canvas class="jchart"></canvas>`;
     } else {
       div.innerHTML = `
         <div class="top"><span class="kind">Piruet ${n}</span><span class="mut">${hhmmss(e.t0)} · ${dir}</span></div>
@@ -279,7 +281,49 @@ function renderList() {
     div.appendChild(inp);
     list.appendChild(div);
     if (e.type === 'spin') drawSpark(div.querySelector('canvas'), e.tempo);
+    else drawJump(div.querySelector('canvas'), e);
   }
+}
+
+// Wykres skoku: góra = g w pionie (lot = poniżej progu) i uderzenie |a|; dół = obr/s wokół pionu.
+// Zielone pole = lot wyliczony przez apkę (wybicie → lądowanie).
+function drawJump(cv, e) {
+  const tr = P.trace(samples, cal, e.t0 - 700, e.t1 + 700);
+  const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const c = cv.getContext('2d'); c.scale(dpr, dpr);
+  if (tr.t.length < 5) return;
+  const thr = P.PROFILES[profile] || P.PROFILES.kids;
+  const tA = tr.t[0], tB = tr.t[tr.t.length - 1], L = 30, Rr = 6;
+  const X = t => L + (t - tA) / (tB - tA) * (W - L - Rr);
+  const top = { y0: 14, y1: 84 }, bot = { y0: 96, y1: H - 14 };
+  const gMax = Math.min(8, Math.max(2, ...tr.g));
+  const Yg = v => top.y1 - Math.max(-0.2, Math.min(gMax, v)) / gMax * (top.y1 - top.y0);
+  const rMax = Math.max(1, ...tr.rps.map(Math.abs));
+  const Yr = v => (bot.y0 + bot.y1) / 2 - v / rMax * (bot.y1 - bot.y0) / 2;
+  // lot
+  c.fillStyle = 'rgba(47,191,113,.18)'; c.fillRect(X(e.t0), top.y0 - 4, X(e.t1) - X(e.t0), bot.y1 - top.y0 + 8);
+  // progi
+  c.setLineDash([3, 3]); c.lineWidth = 1;
+  c.strokeStyle = '#2fbf71'; c.beginPath(); c.moveTo(L, Yg(thr.flightAv)); c.lineTo(W - Rr, Yg(thr.flightAv)); c.stroke();
+  c.strokeStyle = '#f2a93b'; c.beginPath(); c.moveTo(L, Yg(thr.landingMinG)); c.lineTo(W - Rr, Yg(thr.landingMinG)); c.stroke();
+  c.strokeStyle = '#2a303a'; c.beginPath(); c.moveTo(L, Yr(0)); c.lineTo(W - Rr, Yr(0)); c.stroke();
+  c.setLineDash([]);
+  const line = (arr, Y, col, w) => { c.strokeStyle = col; c.lineWidth = w; c.beginPath();
+    arr.forEach((v, i) => { const x = X(tr.t[i]), y = Y(v); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke(); };
+  line(tr.g, Yg, '#5c6573', 1);
+  line(tr.av, Yg, '#5b9dff', 1.8);
+  line(tr.rps, Yr, '#f2a93b', 1.8);
+  // opisy
+  c.fillStyle = '#8b93a1'; c.font = '10px -apple-system, sans-serif';
+  c.fillText(fmt(gMax, 0) + ' g', 2, top.y0 + 4); c.fillText('0 g', 2, Yg(0) + 3);
+  c.fillText(fmt(rMax, 1), 2, bot.y0 + 6); c.fillText('obr/s', 2, bot.y1 + 2);
+  c.fillStyle = '#5b9dff'; c.fillText('g w pionie', L + 2, 10);
+  c.fillStyle = '#5c6573'; c.fillText('uderzenie', L + 62, 10);
+  c.fillStyle = '#f2a93b'; c.fillText('obrót', L + 116, 10);
+  c.fillStyle = '#2fbf71'; c.textAlign = 'center';
+  c.fillText('lot ' + fmt(e.airtimeS, 2) + ' s', (X(e.t0) + X(e.t1)) / 2, H - 2);
+  c.textAlign = 'left';
 }
 
 function drawSpark(cv, vals) {
