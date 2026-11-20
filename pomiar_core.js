@@ -23,13 +23,15 @@
     spinOnRps: 1.0,        // piruet: start powyżej 1 obr/s
     spinOffRps: 0.5,       //         koniec poniżej 0,5 obr/s
     spinMinS: 1.5,
+    spinPauseMs: 250,      // krótsze spowolnienie poniżej spinOffRps nie kończy piruetu
     clipDps: 1950,         // czujnik ±2000 °/s
     maxGapMs: 120          // większa dziura w danych (utracone pakiety) przerywa całkowanie
   };
   // Profile czułości skoków. „Dzieci”: niższe, krótsze skoki i miękkie lądowania.
   const PROFILES = {
-    kids:     { flightAv: 0.5, flightMinMs: 100, landingMinG: 1.35 },
-    standard: { flightAv: 0.35, flightMinMs: 150, landingMinG: 1.8 }
+    // piruety dzieci / obroty poza lodem: wolniejsze (od 0,6 obr/s), z chwilowymi zwolnieniami (przestąpienie)
+    kids:     { flightAv: 0.5, flightMinMs: 100, landingMinG: 1.35, spinOnRps: 0.6, spinOffRps: 0.25, spinPauseMs: 600, spinMinS: 1.0 },
+    standard: { flightAv: 0.35, flightMinMs: 150, landingMinG: 1.8, spinOnRps: 1.0, spinOffRps: 0.5, spinPauseMs: 250, spinMinS: 1.5 }
   };
 
   function parsePacket(str) {
@@ -175,6 +177,8 @@
         revAir: Math.abs(airDeg) / 360,
         revPre: Math.abs(preDeg) / 360,                // obrót na lodzie przed wybiciem
         revPost: Math.abs(postDeg) / 360,
+        // cały obrót skoku: przed wybiciem + w powietrzu + po lądowaniu (tylko w kierunku skoku)
+        revTotal: (Math.abs(airDeg) + Math.max(0, Math.sign(airDeg || 1) * preDeg) + Math.max(0, Math.sign(airDeg || 1) * postDeg)) / 360,
         dir: airDeg >= 0 ? 'L' : 'P',                  // L = przeciwnie do zegara (patrząc z góry)
         maxRps: wMax / 360,
         avgRps: Math.abs(airDeg) / 360 / sec,          // średnia prędkość obrotu w powietrzu
@@ -206,7 +210,7 @@
         if (k > 0 && d.t[k] - d.t[k - 1] > 1000) { e = k - 1; below = d.t[k - 1]; break; }
         if (rps[k] < o.spinOffRps) {
           if (below === null) below = d.t[k];
-          if (d.t[k] - below > 250) break;
+          if (d.t[k] - below > o.spinPauseMs) break;
         } else { below = null; e = k; }
       }
       i = e + 1;
@@ -341,5 +345,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.3', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
+  return { VERSION: 'pomiar-0.4', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
 });

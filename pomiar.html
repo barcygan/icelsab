@@ -205,15 +205,17 @@ const MODE_INFO = {
   jump: 'Skoki: obroty w powietrzu, czas lotu, wysokość, maks. i śr. obr/s, obroty na lodzie przed i po, siła wybicia i lądowania.',
   spin: 'Piruety: obroty, czas, maks. i śr. obr/s, pochylenie osi, równość tempa, wykres tempa, kierunek.',
 };
+// cały obrót skoku (przed + w powietrzu + po); stare zapisy nie mają revTotal
+function revTot(e) { return e.revTotal != null ? e.revTotal : (e.revAir || 0) + (e.revPre || 0) + (e.revPost || 0); }
 function tileHTML(l, v) { return `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div></div>`; }
 function renderModeTiles(live) {
   $('modeInfo').textContent = MODE_INFO[mode];
-  $('prof').hidden = mode !== 'jump';            // czułość dotyczy tylko skoków
+  $('prof').hidden = false;                       // czułość: skoki i piruety
   const jumps = events.filter(e => e.type === 'jump'), spins = events.filter(e => e.type === 'spin');
   const lj = jumps[jumps.length - 1], ls = spins[spins.length - 1], dash = '—';
   let h;
   if (mode === 'jump') {
-    h = tileHTML(lj ? `Ostatni skok (${jumps.length})` : 'Ostatni skok', lj ? fmt(lj.revAir, 1) + ' obr' : dash)
+    h = tileHTML(lj ? `Ostatni skok (${jumps.length})` : 'Ostatni skok', lj ? fmt(lj.revAir, 1) + ' <small style="font-size:14px;color:var(--mut)">/ ' + fmt(revTot(lj), 1) + '</small>' : dash)
       + tileHTML('Wysokość', lj ? Math.round(lj.heightCm) + ' cm' : dash)
       + tileHTML('Max obr/s', lj ? fmt(lj.maxRps, 1) : dash);
   } else {
@@ -239,12 +241,12 @@ function summaryEl(numbered) {
   const sum = (a, f) => a.reduce((s, x) => s + f(x.e), 0);
   let h = '';
   if (jumps.length) {
-    const tot = sum(jumps, e => e.revAir || 0), best = Math.max(...jumps.map(x => x.e.revAir || 0));
+    const tot = sum(jumps, e => e.revAir || 0), best = Math.max(...jumps.map(x => x.e.revAir || 0)), totAll = sum(jumps, revTot);
     h += `<h3>Skoki: ${jumps.length}</h3>
-      <div class="tot">Łącznie ${fmt(tot, 1)} obr. w powietrzu · najwięcej ${fmt(best, 1)} · śr. ${fmt(tot / jumps.length, 1)}</div>
-      <table><tr><th>#</th><th>obroty</th><th>lot</th><th>wys.</th><th>max obr/s</th><th>nazwa</th></tr>`
-      + jumps.map(({ e, n }) => `<tr class="go" data-k="${keyOf(e)}"><td>${n}</td><td class="r">${fmt(e.revAir, 1)}</td>
-          <td>${fmt(e.airtimeS, 2)} s</td><td>${Math.round(e.heightCm)} cm</td><td>${fmt(e.maxRps, 1)}</td>
+      <div class="tot">W powietrzu łącznie ${fmt(tot, 1)} obr. · najwięcej ${fmt(best, 1)} · śr. ${fmt(tot / jumps.length, 1)} · razem z obrotem na lodzie ${fmt(totAll, 1)}</div>
+      <table><tr><th>#</th><th>w pow.</th><th>razem</th><th>lot</th><th>wys.</th><th>nazwa</th></tr>`
+      + jumps.map(({ e, n }) => `<tr class="go" data-k="${keyOf(e)}"><td>${n}</td><td class="r">${fmt(e.revAir, 1)}</td><td>${fmt(revTot(e), 1)}</td>
+          <td>${fmt(e.airtimeS, 2)} s</td><td>${Math.round(e.heightCm)} cm</td>
           <td class="nm" id="nm-${keyOf(e)}"></td></tr>`).join('') + '</table>';
   }
   if (spins.length) {
@@ -286,7 +288,7 @@ function renderList() {
     if (e.type === 'jump') {
       div.innerHTML = `
         <div class="top"><span class="kind">Skok ${n}</span><span class="mut">${hhmmss(e.t0)} · ${dir}</span></div>
-        <div class="main">${fmt(e.revAir, 1)} <small>obr. w powietrzu</small></div>
+        <div class="main">${fmt(e.revAir, 1)} <small>obr. w powietrzu · razem z lodem ${fmt(revTot(e), 1)}</small></div>
         <div class="grid3">
           <div>${fmt(e.airtimeS, 2)} s<span>czas lotu</span></div>
           <div>${Math.round(e.heightCm)} cm<span>wysokość</span></div>
@@ -422,7 +424,7 @@ function resultsText() {
   let nj = 0, ns = 0;
   return events.map(e => {
     const nm = names[keyOf(e)] ? ` [${names[keyOf(e)]}]` : '';
-    if (e.type === 'jump') return `Skok ${++nj}${nm} ${hhmmss(e.t0)}: ${fmt(e.revAir, 2)} obr w powietrzu (+${fmt(e.revPre, 2)} na lodzie), lot ${fmt(e.airtimeS, 2)} s, ${Math.round(e.heightCm)} cm, max ${fmt(e.maxRps, 1)} obr/s, śr. ${fmt(e.avgRps || 0, 1)} obr/s, wybicie ${fmt(e.takeoffG, 1)} g, lądowanie ${fmt(e.landingG, 1)} g${e.clipped ? ', POZA ZAKRESEM' : ''}`;
+    if (e.type === 'jump') return `Skok ${++nj}${nm} ${hhmmss(e.t0)}: ${fmt(e.revAir, 2)} obr w powietrzu (+${fmt(e.revPre, 2)} przed, +${fmt(e.revPost || 0, 2)} po, razem ${fmt(revTot(e), 2)}), lot ${fmt(e.airtimeS, 2)} s, ${Math.round(e.heightCm)} cm, max ${fmt(e.maxRps, 1)} obr/s, śr. ${fmt(e.avgRps || 0, 1)} obr/s, wybicie ${fmt(e.takeoffG, 1)} g, lądowanie ${fmt(e.landingG, 1)} g${e.clipped ? ', POZA ZAKRESEM' : ''}`;
     return `Piruet ${++ns}${nm} ${hhmmss(e.t0)}: ${fmt(e.revs, 1)} obr, ${fmt(e.durationS, 1)} s, śr. ${fmt(e.avgRps, 1)} obr/s, max ${fmt(e.maxRps, 1)}${e.axisTiltDeg != null ? ', oś ' + Math.round(e.axisTiltDeg) + '°' : ''}${e.tempoVarPct != null ? ', tempo ±' + Math.round(e.tempoVarPct) + '%' : ''}${e.clipped ? ', POZA ZAKRESEM' : ''}`;
   }).join('\n');
 }
