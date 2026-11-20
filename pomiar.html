@@ -59,6 +59,7 @@
   .hs button { min-height:44px; padding:0 12px; font-size:15px; }
   .hs button.del { background:transparent; color:var(--mut); }
   .hs button.del.armed { background:var(--bad); color:#fff; }
+  #btnSleep.armed { background:var(--warn); color:#111; }
   #viewing { display:flex; align-items:center; gap:8px; background:#1d2a44; border-radius:12px; padding:8px 12px; margin-bottom:10px; font-size:14px; }
   #viewing span { flex:1; }
   .sum { background:var(--card); border-radius:14px; padding:12px; margin-bottom:10px; }
@@ -108,6 +109,7 @@
 
 <div id="list"><div class="empty">Brak pomiarów. Połącz czujnik, wybierz rodzaj i naciśnij Start.</div></div>
 
+<button class="sec full" id="btnSleep" hidden>Uśpij czujnik</button>
 <div class="row" style="margin:6px 0 10px">
   <button class="sec" id="btnCopy" disabled>Kopiuj wyniki</button>
   <button class="sec" id="btnCsv" disabled>Zapisz dane (CSV)</button>
@@ -532,12 +534,34 @@ async function connectGatt() {
   status('warn', 'Łączenie…', device.name || '');
   const server = await device.gatt.connect();
   const ch = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CHAR);
+  chr = ch;
   ch.addEventListener('characteristicvaluechanged', onPacket);
   await ch.startNotifications();
   status('ok', 'Połączony', device.name || ''); $('btnRec').disabled = false;
   if (!recording) $('hint').textContent = 'Wybierz rodzaj i naciśnij Start. Potem stań nieruchomo na sekundę.';
 }
+let chr = null, sleepArm = 0, sentSleep = false;
+// Uśpij czujnik: 2 stuknięcia (bez okienek). Czujnik budzi się sam, gdy się poruszy.
+$('btnSleep').onclick = async () => {
+  const b = $('btnSleep');
+  if (!sleepArm) {
+    b.classList.add('armed'); b.textContent = 'Stuknij jeszcze raz, żeby uśpić';
+    sleepArm = setTimeout(() => { sleepArm = 0; b.classList.remove('armed'); b.textContent = 'Uśpij czujnik'; }, 3000);
+    return;
+  }
+  clearTimeout(sleepArm); sleepArm = 0; b.classList.remove('armed'); b.textContent = 'Uśpij czujnik';
+  if (!chr || !chr.properties.write) {
+    status('warn', 'Ten czujnik nie umie się uśpić', 'Potrzebny nowy firmware (podłącz USB do Maca)'); return;
+  }
+  try {
+    wantConnected = false; sentSleep = true;
+    await chr.writeValue(new TextEncoder().encode('sleep'));
+    status('', 'Czujnik uśpiony', 'Obudzi się sam, gdy go poruszysz — potem „Połącz”');
+    $('btnConnect').textContent = 'Połącz z czujnikiem';
+  } catch (e) { status('bad', 'Nie udało się uśpić', e.message); }
+};
 async function onDisconnected() {
+  if (sentSleep) { sentSleep = false; status('', 'Czujnik uśpiony', 'Obudzi się sam, gdy go poruszysz — potem „Połącz”'); return; }
   status('bad', 'Rozłączony', wantConnected ? 'Łączę ponownie… (nagranie trwa, dziura w danych)' : '');
   while (wantConnected && device && !device.gatt.connected) {
     try { await connectGatt(); return; } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
@@ -557,6 +581,7 @@ $('btnConnect').onclick = async () => {
   } catch (e) { status('bad', 'Nie udało się połączyć', e.message); }
 };
 setInterval(() => {
+  $('btnSleep').hidden = !(device && device.gatt.connected) || recording;
   if (device && device.gatt.connected && lastPacket && performance.now() - lastPacket > 1000) status('warn', 'Połączony, brak danych', 'Sygnał na granicy zasięgu?');
   else if (device && device.gatt.connected) status('ok', 'Połączony', device.name || '');
 }, 500);
