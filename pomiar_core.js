@@ -15,7 +15,7 @@
 
   const DEFAULTS = {
     flightAv: 0.35,        // g wzdłuż pionu poniżej → w powietrzu
-    flightGapMs: 30,       // krótkie przerwy w locie (szum) łączymy
+    flightGapMs: 40,       // krótkie przerwy w locie (szum, ruch nóg) łączymy
     flightMinMs: 150,      // krótszy "lot" to szum / podskok
     flightMaxMs: 1000,
     landingMinG: 1.8,      // lądowanie zawsze daje uderzenie
@@ -50,6 +50,23 @@
 
   const dot = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
   const norm = x => Math.hypot(x[0], x[1], x[2]);
+
+  // Sygnał lotu [g]: przyspieszenie wzdłuż pionu buta. Gdy but szybko obraca się wokół (prawie) pionu,
+  // bierzemy przyspieszenie wzdłuż OSI OBROTU: czujnik z boku buta jest kilka-kilkanaście cm od osi,
+  // więc w locie łapie 2-4 g siły odśrodkowej, a przy lekko pochylonej stopie jej część wpada w „pion”
+  // (realny skok 20.11: 0,7 g w locie → lot ucięty z 0,40 s do 0,15 s). Wzdłuż osi obrotu siły
+  // odśrodkowej nie ma, a grawitacja na lodzie nadal daje ~1 g.
+  function flightSig(s, cal) {
+    const av = dot(s.a, cal.u) / cal.g0;
+    const w0 = s.w[0] - cal.bias[0], w1 = s.w[1] - cal.bias[1], w2 = s.w[2] - cal.bias[2];
+    const wm = Math.hypot(w0, w1, w2);
+    if (wm < 180) return av;                                  // < 0,5 obr/s: siła odśrodkowa mała
+    if (Math.max(Math.abs(s.w[0]), Math.abs(s.w[1]), Math.abs(s.w[2])) > 1900) return av;  // żyro nasycone: kierunek osi niepewny
+    const wvn = (w0 * cal.u[0] + w1 * cal.u[1] + w2 * cal.u[2]) / wm;
+    if (Math.abs(wvn) < 0.7) return av;                       // oś obrotu daleko od pionu (zamach nogą)
+    const sg = wvn >= 0 ? 1 : -1;
+    return sg * (s.a[0] * w0 + s.a[1] * w1 + s.a[2] * w2) / wm / cal.g0;
+  }
 
   // Szuka okna ≥ winMs bezruchu (żyro < 25 °/s, stabilne |a|) od początku nagrania.
   // Zwraca kalibrację albo null, gdy jeszcze nie ma takiego okna.
@@ -100,7 +117,7 @@
     for (let i = 0; i < n; i++) {
       const s = samples[i];
       t[i] = s.t;
-      av[i] = dot(s.a, cal.u) / cal.g0;
+      av[i] = flightSig(s, cal);
       wv[i] = (s.w[0] - cal.bias[0]) * cal.u[0] + (s.w[1] - cal.bias[1]) * cal.u[1] + (s.w[2] - cal.bias[2]) * cal.u[2];
       amag[i] = norm(s.a) / cal.g0;
       wpeak[i] = Math.max(Math.abs(s.w[0]), Math.abs(s.w[1]), Math.abs(s.w[2]));
@@ -268,7 +285,7 @@
       if (s.t < tA) continue;
       if (s.t > tB) break;
       out.t.push(s.t);
-      out.av.push(dot(s.a, cal.u) / cal.g0);
+      out.av.push(flightSig(s, cal));
       out.g.push(norm(s.a) / cal.g0);
       out.rps.push(((s.w[0] - cal.bias[0]) * cal.u[0] + (s.w[1] - cal.bias[1]) * cal.u[1] + (s.w[2] - cal.bias[2]) * cal.u[2]) / 360);
     }
@@ -345,5 +362,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.4', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
+  return { VERSION: 'pomiar-0.5', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
 });
