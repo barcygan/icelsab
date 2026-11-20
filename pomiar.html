@@ -61,6 +61,16 @@
   .hs button.del.armed { background:var(--bad); color:#fff; }
   #viewing { display:flex; align-items:center; gap:8px; background:#1d2a44; border-radius:12px; padding:8px 12px; margin-bottom:10px; font-size:14px; }
   #viewing span { flex:1; }
+  .sum { background:var(--card); border-radius:14px; padding:12px; margin-bottom:10px; }
+  .sum h3 { margin:0 0 2px; font-size:16px; }
+  .sum .tot { color:var(--mut); font-size:13px; margin-bottom:8px; }
+  .sum table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  .sum th { color:var(--mut); font-size:11px; font-weight:500; text-align:right; padding:2px 6px 4px; }
+  .sum td { text-align:right; padding:7px 6px; border-top:1px solid var(--line); font-size:15px; }
+  .sum th:first-child, .sum td:first-child { text-align:left; padding-left:0; }
+  .sum td.r { font-size:19px; font-weight:800; }
+  .sum td.nm { color:var(--mut); font-size:13px; max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sum tr.go { cursor:pointer; }
 </style>
 <link rel="manifest" href="manifest.json">
 </head>
@@ -220,6 +230,38 @@ function hhmmss(devMs) {
   return new Date(sessionStart.wall + (devMs - sessionStart.dev)).toLocaleTimeString('pl-PL');
 }
 
+// Podsumowanie sesji: każdy skok / piruet w jednej linii, obroty jako pierwsza, największa liczba.
+function summaryEl(numbered) {
+  const box = document.createElement('div'); box.className = 'sum';
+  const jumps = numbered.filter(x => x.e.type === 'jump'), spins = numbered.filter(x => x.e.type === 'spin');
+  const sum = (a, f) => a.reduce((s, x) => s + f(x.e), 0);
+  let h = '';
+  if (jumps.length) {
+    const tot = sum(jumps, e => e.revAir || 0), best = Math.max(...jumps.map(x => x.e.revAir || 0));
+    h += `<h3>Skoki: ${jumps.length}</h3>
+      <div class="tot">Łącznie ${fmt(tot, 1)} obr. w powietrzu · najwięcej ${fmt(best, 1)} · śr. ${fmt(tot / jumps.length, 1)}</div>
+      <table><tr><th>#</th><th>obroty</th><th>lot</th><th>wys.</th><th>max obr/s</th><th>nazwa</th></tr>`
+      + jumps.map(({ e, n }) => `<tr class="go" data-k="${keyOf(e)}"><td>${n}</td><td class="r">${fmt(e.revAir, 1)}</td>
+          <td>${fmt(e.airtimeS, 2)} s</td><td>${Math.round(e.heightCm)} cm</td><td>${fmt(e.maxRps, 1)}</td>
+          <td class="nm" id="nm-${keyOf(e)}"></td></tr>`).join('') + '</table>';
+  }
+  if (spins.length) {
+    const tot = sum(spins, e => e.revs || 0), best = Math.max(...spins.map(x => x.e.revs || 0));
+    h += `<h3${jumps.length ? ' style="margin-top:14px"' : ''}>Piruety: ${spins.length}</h3>
+      <div class="tot">Łącznie ${fmt(tot, 1)} obr. · najwięcej ${fmt(best, 1)} · śr. ${fmt(tot / spins.length, 1)}</div>
+      <table><tr><th>#</th><th>obroty</th><th>czas</th><th>śr. obr/s</th><th>max obr/s</th><th>nazwa</th></tr>`
+      + spins.map(({ e, n }) => `<tr class="go" data-k="${keyOf(e)}"><td>${n}</td><td class="r">${fmt(e.revs, 1)}</td>
+          <td>${fmt(e.durationS, 1)} s</td><td>${fmt(e.avgRps, 1)}</td><td>${fmt(e.maxRps, 1)}</td>
+          <td class="nm" id="nm-${keyOf(e)}"></td></tr>`).join('') + '</table>';
+  }
+  box.innerHTML = h;
+  box.querySelectorAll('td.nm').forEach(td => { td.textContent = names[td.id.slice(3)] || ''; });
+  box.querySelectorAll('tr.go').forEach(tr => tr.onclick = () => {
+    const el = document.getElementById('ev-' + tr.dataset.k); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  return box;
+}
+
 let renderedSig = '';
 function renderList() {
   const sig = events.map(e => keyOf(e) + (e.revAir || e.revs || 0).toFixed(2)).join('|') + calApprox + recording + !!cal;
@@ -235,8 +277,9 @@ function renderList() {
   list.innerHTML = '';
   let nj = 0, ns = 0;
   const numbered = events.map(e => ({ e, n: e.type === 'jump' ? ++nj : ++ns }));
+  list.appendChild(summaryEl(numbered));
   for (const { e, n } of numbered.reverse()) {
-    const div = document.createElement('div'); div.className = 'ev';
+    const div = document.createElement('div'); div.className = 'ev'; div.id = 'ev-' + keyOf(e);
     const dir = e.dir === 'L' ? 'w lewo' : 'w prawo';
     if (e.type === 'jump') {
       div.innerHTML = `
@@ -272,7 +315,10 @@ function renderList() {
     const inp = document.createElement('input');
     inp.placeholder = 'Nazwa (opcjonalnie), np. 2S, Axel';
     const k = keyOf(e); inp.value = names[k] || '';
-    inp.oninput = () => { names[k] = inp.value; if (!recording) scheduleSave(); };
+    inp.oninput = () => {
+      names[k] = inp.value; if (!recording) scheduleSave();
+      const cell = document.getElementById('nm-' + k); if (cell) cell.textContent = inp.value;
+    };
     div.appendChild(inp);
     list.appendChild(div);
     if (e.type === 'spin') drawSpark(div.querySelector('canvas'), e.tempo);
