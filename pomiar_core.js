@@ -53,6 +53,26 @@
     };
   }
 
+  // Pakiet binarny (firmware XIAO z buforem): [0xB1][n][bat lo][bat hi | ładowanie<<7][rssi][zaległe s]
+  // + n próbek po 16 bajtów: t_ms u32, acc 3×i16 (±16 g), gyro 3×i16 (2000 °/s), little-endian.
+  const BIN_MAGIC = 0xB1, ACC_LSB = 0.000488, GYRO_LSB = 0.070;
+  function parseBinary(dv) {
+    if (!dv || dv.byteLength < 6 || dv.getUint8(0) !== BIN_MAGIC) return null;
+    const n = Math.min(dv.getUint8(1), Math.floor((dv.byteLength - 6) / 16));
+    const b = dv.getUint16(2, true), mv = b & 0x7FFF, rssi = dv.getInt8(4);
+    const samples = [];
+    for (let k = 0; k < n; k++) {
+      const o = 6 + k * 16;
+      samples.push({
+        t: dv.getUint32(o, true),
+        a: [dv.getInt16(o + 4, true) * ACC_LSB, dv.getInt16(o + 6, true) * ACC_LSB, dv.getInt16(o + 8, true) * ACC_LSB],
+        w: [dv.getInt16(o + 10, true) * GYRO_LSB, dv.getInt16(o + 12, true) * GYRO_LSB, dv.getInt16(o + 14, true) * GYRO_LSB],
+        seq: null, rssi: rssi || null, bat: mv > 0 ? mv : null, chg: !!(b & 0x8000)
+      });
+    }
+    return { samples, backlogS: dv.getUint8(5) };
+  }
+
   // Napięcie LiPo w spoczynku -> przybliżony procent (pod obciążeniem i na mrozie zaniża)
   const BAT_CURVE = [[3300, 0], [3600, 5], [3700, 15], [3750, 25], [3800, 40], [3850, 55], [3900, 65], [4000, 80], [4100, 92], [4180, 100]];
   function batteryPercent(mv) {
@@ -422,5 +442,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.6', DEFAULTS, PROFILES, parsePacket, batteryPercent, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
+  return { VERSION: 'pomiar-0.6', DEFAULTS, PROFILES, parsePacket, parseBinary, batteryPercent, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
 });

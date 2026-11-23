@@ -163,7 +163,14 @@ function onSample(s) {
   if (samples.length && s.t <= samples[samples.length - 1].t) return;
   samples.push(s);
 }
-function onPacket(ev) { const s = P.parsePacket(new TextDecoder().decode(ev.target.value)); if (s) onSample(s); }
+// Czujnik z buforem (XIAO) wysyła pakiety binarne po kilka próbek i dosyła zaległe po zerwaniu łącza
+let buffered = false, backlogS = 0;
+function onPacket(ev) {
+  const dv = ev.target.value;
+  const b = P.parseBinary(dv);
+  if (b) { buffered = true; backlogS = b.backlogS; b.samples.forEach(onSample); return; }
+  const s = P.parsePacket(new TextDecoder().decode(dv)); if (s) onSample(s);
+}
 
 // ---------- analiza (co 0,5 s całe nagranie; zdarzenia są stabilne) ----------
 function tick() {
@@ -556,6 +563,13 @@ async function connectGatt() {
   chr = ch;
   ch.addEventListener('characteristicvaluechanged', onPacket);
   await ch.startNotifications();
+  backlogS = 0;
+  // Czujnik z buforem: w trakcie nagrania prosimy o wszystko po ostatniej próbce, którą mamy; inaczej od teraz.
+  // Stary czujnik nieznaną komendę pomija i nadaje po staremu.
+  if (ch.properties.write) {
+    const last = recording && samples.length ? samples[samples.length - 1].t : null;
+    try { await ch.writeValue(new TextEncoder().encode(last === null ? 'live' : 'from:' + last)); } catch (e) {}
+  }
   status('ok', 'Połączony', device.name || ''); $('btnRec').disabled = false;
   if (!recording) $('hint').textContent = 'Wybierz rodzaj i naciśnij Start. Potem stań nieruchomo na sekundę.';
 }
@@ -582,7 +596,7 @@ $('btnSleep').onclick = async () => {
 async function onDisconnected() {
   showBattery(null);
   if (sentSleep) { sentSleep = false; status('', 'Czujnik uśpiony', 'Obudzi się sam, gdy go poruszysz — potem „Połącz”'); return; }
-  status('bad', 'Rozłączony', wantConnected ? 'Łączę ponownie… (nagranie trwa, dziura w danych)' : '');
+  status('bad', 'Rozłączony', wantConnected ? (buffered ? 'Łączę ponownie… czujnik zapamiętuje do 100 s i dośle po połączeniu' : 'Łączę ponownie… (nagranie trwa, dziura w danych)') : '');
   while (wantConnected && device && !device.gatt.connected) {
     try { await connectGatt(); return; } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
   }
@@ -603,6 +617,7 @@ $('btnConnect').onclick = async () => {
 setInterval(() => {
   $('btnSleep').hidden = !(device && device.gatt.connected) || recording;
   if (device && device.gatt.connected && lastPacket && performance.now() - lastPacket > 1000) status('warn', 'Połączony, brak danych', 'Sygnał na granicy zasięgu?');
+  else if (device && device.gatt.connected && backlogS > 0) status('warn', 'Dosyłanie danych z czujnika', 'zostało ok. ' + backlogS + ' s nagrania');
   else if (device && device.gatt.connected) status('ok', 'Połączony', device.name || '');
 }, 500);
 
