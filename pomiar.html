@@ -143,10 +143,10 @@ const S = window.PomiarStore;
 function status(cls, text, sub) { $('dot').className = 'dot ' + cls; $('st').textContent = text; $('sub').textContent = sub || ''; }
 
 // ---------- dane ----------
-let batShown = 0;
+let batShown = -1e9;
 function showBattery(s) {
   const el = $('bat');
-  if (s === null) { el.hidden = true; batShown = 0; return; }
+  if (s === null) { el.hidden = true; batShown = -1e9; return; }
   if (s.bat == null || performance.now() - batShown < 2000) return;
   batShown = performance.now();
   const pct = P.batteryPercent(s.bat), v = fmt(s.bat / 1000, 2) + ' V';
