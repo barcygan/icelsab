@@ -28,6 +28,11 @@
     spinMinS: 1.5,
     spinPauseMs: 250,      // krótsze spowolnienie poniżej spinOffRps nie kończy piruetu
     clipDps: 1950,         // czujnik ±2000 °/s
+    clipMinMs: 15,         // nasycenie żyroskopu W LOCIE dłuższe niż to = obrót zaniżony (pik przy uderzeniu się nie liczy)
+    flightSmoothMs: 150,   // w locie but rusza się względem ciała (podciąganie nóg): średnia g w pionie z tego okna
+                           // też musi być poniżej progu, żeby krótki „garb” nie uciął lotu
+    impactMinG: 6,         // lądowanie z takim uderzeniem wyznacza koniec lotu (szukane tuż przed / do 150 ms po)
+    impactSearchMs: 150,
     maxGapMs: 120          // większa dziura w danych (utracone pakiety) przerywa całkowanie
   };
   // Profile czułości skoków. „Dzieci”: niższe, krótsze skoki i miękkie lądowania.
@@ -215,25 +220,53 @@
     return m;
   }
 
+  // „W powietrzu”: g w pionie poniżej progu — w tej próbce albo średnio w oknie flightSmoothMs wokół niej.
+  function airborne(d, o) {
+    const air = new Uint8Array(d.n), half = (o.flightSmoothMs || 0) / 2;
+    let lo = 0, hi = 0, sum = 0;
+    for (let i = 0; i < d.n; i++) {
+      if (d.av[i] < o.flightAv) { air[i] = 1; continue; }
+      if (!half) continue;
+      while (hi < d.n && d.t[hi] <= d.t[i] + half) { sum += d.av[hi]; hi++; }
+      while (d.t[lo] < d.t[i] - half) { sum -= d.av[lo]; lo++; }
+      // pełne okno bez dziur w danych (na końcu nagrania czekamy na kolejne próbki)
+      if (d.t[hi - 1] - d.t[lo] >= o.flightSmoothMs * 0.8 && hi - lo >= 4 && sum / (hi - lo) < o.flightAv) air[i] = 1;
+    }
+    return air;
+  }
+
   function findJumps(d, o) {
     const out = [];
+    const air = airborne(d, o);
     let i = 0;
     while (i < d.n) {
-      if (d.av[i] >= o.flightAv) { i++; continue; }
+      if (!air[i]) { i++; continue; }
       // początek lotu: i; przedłużaj, łącząc krótkie przerwy
       const s = i;
       let e = i, j = i + 1;
       while (j < d.n) {
         if (d.t[j] - d.t[j - 1] > o.maxGapMs) break;
-        if (d.av[j] < o.flightAv) { e = j; j++; continue; }
+        if (air[j]) { e = j; j++; continue; }
         // przerwa: sprawdź, czy krótka
         let k = j;
-        while (k < d.n && d.av[k] >= o.flightAv && d.t[k] - d.t[e] <= o.flightGapMs) k++;
-        if (k < d.n && d.av[k] < o.flightAv && d.t[k] - d.t[e] <= o.flightGapMs) { j = k; continue; }
+        while (k < d.n && !air[k] && d.t[k] - d.t[e] <= o.flightGapMs) k++;
+        if (k < d.n && air[k] && d.t[k] - d.t[e] <= o.flightGapMs) { j = k; continue; }
         break;
       }
-      i = e + 1;
+      i = e;
       if (e >= d.n - 2) break; // lot jeszcze trwa (na żywo) — poczekaj na lądowanie
+      // Twarde lądowanie: koniec lotu to początek uderzenia, nie chwila, gdy g w pionie przekroczyło próg
+      // (przed lądowaniem noga się prostuje i sygnał rośnie wcześniej; siła odśrodkowa też go zaburza).
+      if (o.impactMinG) {
+        let pk = 0, k0 = e;
+        while (k0 > s + 1 && d.t[e] - d.t[k0 - 1] <= o.flightSmoothMs / 2) k0--;
+        for (let k = k0; k < d.n && d.t[k] - d.t[e] <= o.impactSearchMs; k++) if (d.amag[k] > pk) pk = d.amag[k];
+        if (pk >= o.impactMinG) {
+          if (d.t[d.n - 1] < d.t[e] + o.impactSearchMs) break;   // uderzenie może jeszcze rosnąć — dokończ później
+          for (let k = k0; k < d.n; k++) if (d.amag[k] >= 0.6 * pk) { e = Math.max(s, k - 1); break; }
+        }
+      }
+      i = Math.max(i, e) + 1;   // zawsze do przodu
       const tTake = s > 0 ? (d.t[s - 1] + d.t[s]) / 2 : d.t[s];
       const tLand = (d.t[e] + d.t[e + 1]) / 2;
       const dur = tLand - tTake;
@@ -251,8 +284,11 @@
       const preDeg = integrate(d, p, Math.max(p, s - 1), o.maxGapMs, false);
       const postDeg = integrate(d, Math.min(q, e + 1), q, o.maxGapMs, false);
 
-      let wMax = 0;
-      for (let k = s; k <= e; k++) wMax = Math.max(wMax, Math.abs(d.wv[k]));
+      let wMax = 0, clipMs = 0;
+      for (let k = s; k <= e; k++) {
+        wMax = Math.max(wMax, Math.abs(d.wv[k]));
+        if (d.wpeak[k] > o.clipDps && k > 0) clipMs += Math.min(d.t[k] - d.t[k - 1], o.maxGapMs);
+      }
       const sec = dur / 1000;
       const sgn = Math.sign(airDeg || 1);
       const revTotal = (Math.abs(airDeg) + Math.max(0, sgn * preDeg) + Math.max(0, sgn * postDeg)) / 360;
@@ -272,7 +308,7 @@
         avgRps: Math.abs(airDeg) / 360 / sec,          // średnia prędkość obrotu w powietrzu
         takeoffG: maxIn(d.amag, d, tTake - 300, tTake),
         landingG: landG,
-        clipped: maxIn(d.wpeak, d, tTake - 200, tLand + 200) > o.clipDps
+        clipMs, clipped: clipMs >= o.clipMinMs
       });
     }
     return out;
@@ -442,5 +478,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.6', DEFAULTS, PROFILES, parsePacket, parseBinary, batteryPercent, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
+  return { VERSION: 'pomiar-0.7', DEFAULTS, PROFILES, parsePacket, parseBinary, batteryPercent, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
 });
