@@ -47,8 +47,22 @@
       a: [p[1] / G, p[2] / G, p[3] / G],                 // g
       w: [p[4] * R2D, p[5] * R2D, p[6] * R2D],           // °/s
       seq: p.length >= 8 ? +p[7] : null,
-      rssi: p.length >= 9 ? +p[8] : null
+      rssi: p.length >= 9 ? +p[8] : null,
+      bat: p.length >= 10 && +p[9] > 0 ? +p[9] : null,   // mV (XIAO firmware), null = czujnik nie mierzy
+      chg: p.length >= 11 ? +p[10] === 1 : null
     };
+  }
+
+  // Napięcie LiPo w spoczynku -> przybliżony procent (pod obciążeniem i na mrozie zaniża)
+  const BAT_CURVE = [[3300, 0], [3600, 5], [3700, 15], [3750, 25], [3800, 40], [3850, 55], [3900, 65], [4000, 80], [4100, 92], [4180, 100]];
+  function batteryPercent(mv) {
+    if (!(mv > 0)) return null;
+    if (mv <= BAT_CURVE[0][0]) return 0;
+    for (let i = 1; i < BAT_CURVE.length; i++) {
+      const [v1, p1] = BAT_CURVE[i], [v0, p0] = BAT_CURVE[i - 1];
+      if (mv <= v1) return Math.round(p0 + (p1 - p0) * (mv - v0) / (v1 - v0));
+    }
+    return 100;
   }
 
   const dot = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
@@ -408,5 +422,5 @@
     return rows.join('\n');
   }
 
-  return { VERSION: 'pomiar-0.6', DEFAULTS, PROFILES, parsePacket, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
+  return { VERSION: 'pomiar-0.6', DEFAULTS, PROFILES, parsePacket, batteryPercent, findCalibration, calibrateRange, approxCalibration, analyze, trace, simulate, toCSV };
 });
